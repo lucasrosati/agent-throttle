@@ -1,0 +1,7 @@
+# Not a Python package: this file only configures ruff.
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
