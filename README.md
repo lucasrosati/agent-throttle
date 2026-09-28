@@ -18,6 +18,15 @@ your other hooks kept). Run `solo sleep 3` in two terminals at once to see the s
 check that Claude Code now runs before every Bash command. Then paste the rules for your agents
 ([below](#rules-for-your-agents)).
 
+## Status
+
+- **Version 0.1.0**, the first public release.
+- **Tested on macOS and Linux** (the guard and the semaphore): every test runs in CI on `ubuntu-latest` and
+  `macos-latest`.
+- **macOS only for now:** `throttle-load` and the scheduled jobs (launchd). Linux support is welcome.
+- **Metrics are being collected:** the defaults come from measurements on one 16 GB laptop, and the weekly report is
+  gathering data on how they hold up. Numbers from other machines are welcome in an issue.
+
 ## The problem
 
 Agents write code in parallel just fine: a session uses well under 1 GB. Validation is what takes a machine down. Three

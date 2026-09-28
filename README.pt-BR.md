@@ -19,6 +19,15 @@ antes e mantendo seus outros hooks). Rode `solo sleep 3` em dois terminais ao me
 terceira mostra a checagem que o Claude Code passa a fazer antes de cada comando Bash. Depois, cole as regras para os
 seus agents ([abaixo](#regras-para-os-agents)).
 
+## Status
+
+- **Versão 0.1.0**, a primeira pública.
+- **Testado em macOS e Linux** (o guard e o semáforo): todos os testes rodam no CI em `ubuntu-latest` e
+  `macos-latest`.
+- **Só macOS por enquanto:** `throttle-load` e os jobs agendados (launchd). Suporte a Linux é bem-vindo.
+- **Métricas em coleta:** os defaults vêm de medições num notebook de 16 GB, e o relatório semanal está juntando dados
+  sobre como eles se sustentam. Números de outras máquinas são bem-vindos numa issue.
+
 ## O problema
 
 Agents escrevem código em paralelo sem problema: uma sessão usa bem menos de 1 GB. O que derruba a máquina é a
