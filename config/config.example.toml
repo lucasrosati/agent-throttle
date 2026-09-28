@@ -1,0 +1,114 @@
+# agent-throttle configuration.
+#
+# Location: $AGENT_THROTTLE_CONFIG, or ${XDG_CONFIG_HOME:-~/.config}/agent-throttle/config.toml.
+# Every key is optional: what you leave out keeps the default shown here. `throttle-config show` prints the effective
+# values. A broken file or a wrong value prints a warning and falls back to the default; nothing stops working.
+#
+# The defaults were measured on a 16 GB, 10-core laptop with no fan, running up to 5 coding agents plus one heavy
+# validation at a time. Different hardware deserves its own numbers: see "How to calibrate" at the end.
+
+[semaphore]
+# `solo <command>` runs one heavy validation at a time on the machine. The guard treats a command prefixed with
+# `solo` (or with one of these aliases) as "inside the semaphore". Useful if you keep an older name as a symlink.
+aliases = []
+# Lock directory (created atomically with mkdir). Keep it on a fixed path: agent sandboxes may change $TMPDIR, and
+# every process on the machine must see the same lock.
+lock_dir = "/tmp/agent-throttle.lock"
+# Timeout per validation, in seconds, counted from the start of the command (waiting for the slot does not count).
+# On timeout the whole process tree is killed, the slot is released and solo exits with 124. SOLO_TIMEOUT overrides.
+timeout_s = 1200
+# Seconds between checks while waiting for the slot.
+poll_s = 15
+# A lock directory without an owner PID for this long is treated as abandoned.
+stale_lock_s = 60
+
+[semaphore.env]
+# Exported to the command that solo runs. Playwright's html reporter opens a server and waits for Ctrl+C after a
+# failure when stdin is a terminal, which would hold the slot forever.
+PLAYWRIGHT_HTML_OPEN = "never"
+
+[semaphore.ci]
+# solo-ci: push the branch (never forced) and use the pull request CI as the final validation.
+timeout_s = 3600
+interval_s = 30
+# A green result with fewer checks than this is reported as rc=3 ("absence is not approval"). Per repository:
+# git config agent-throttle.minchecks 7
+min_checks = 0
+
+[limits]
+# Worker ceilings per test runner: [inside solo, outside solo]. Workers must be a literal number; percentages,
+# "auto" and variables are blocked. Measured on 16 GB and 10 cores: 4 workers inside the semaphore cost about 0.3 GB
+# more than 2 on a ~190-suite Jest package and cut its time by a third; outside the semaphore several agents may
+# iterate at once, so each gets 2. Playwright is lower because each worker is a browser (~0.6 GB).
+jest = [4, 2]
+vitest = [4, 2]
+pytest = [4, 2]
+playwright = [2, 1]
+
+[guard]
+# package.json scripts that always count as heavy (full type-check, full lint + tests): only inside solo.
+heavy_scripts = ["validate:local", "typecheck"]
+# One TSV line per block in <logs.dir>/guard-blocks.log (the command is truncated and secrets are masked).
+log_blocks = true
+
+[load]
+# throttle-load says "DO NOT launch" below this free memory percentage or above this swap usage.
+min_free_pct = 25
+max_swap_mb = 3072
+# Coding agents at once. "auto" = floor((total RAM in GB - 6) / 2), clamped to 1..12:
+#   8 GB -> 1, 16 GB -> 5, 24 GB -> 9, 32 GB or more -> 12.
+# 6 GB are reserved for the OS and apps (~2 GB) plus one heavy validation inside solo (~4 GB peak); each agent gets
+# 2 GB (the session itself, 0.3 to 0.8 GB, plus the language servers and single-file test runs it starts).
+max_agents = "auto"
+# Process names counted as agent sessions (basename of the executable).
+agent_processes = ["claude", "codex"]
+# Regular expression (awk) for processes counted as test runs.
+test_process_regex = "jest|vitest|pytest|playwright|(^|[/ ])tsc( |$)"
+
+[clean]
+# throttle-clean: prune worktrees, delete build artifacts inside worktrees, offer to kill leftover test processes.
+worktree_dirs = [".claude/worktrees", ".worktrees"]
+artifact_dirs = [".next", "coverage"]
+process_regex = "jest|vitest|tsc --noEmit"
+
+[logs]
+# "" = ${XDG_STATE_HOME:-~/.local/state}/agent-throttle
+dir = ""
+retention_days = 60
+
+[report]
+# "" = <logs.dir>/reports
+output_dir = ""
+# Folder with your git checkouts (one or two levels deep). Set it to count pull requests per week with `gh`.
+repos_dir = ""
+wait_p95_target_s = 180
+min_free_target_pct = 20
+# Samples with this many agent sessions or more count as "high load" in the weekly report.
+high_sessions = 4
+
+# ---------------------------------------------------------------------------------------------------------------------
+# How to calibrate
+#
+# 1. Idle baseline. Close the agents and run `throttle-load`. Note the free memory percentage and the swap.
+#
+# 2. Your heaviest suite, alone. With nothing else heavy running, measure it through the semaphore at 2 and at 4
+#    workers, twice each, alternating (A B A B), and watch the peak in another terminal with `throttle-load`:
+#      solo npx jest --ci --maxWorkers=2
+#      solo npx jest --ci --maxWorkers=4
+#    solo prints `rc=N in Ns`; the log (semaphore.log) keeps every duration. Laptops without a fan slow down after a
+#    long battery of runs (thermal throttling: the same suite went from 22 s to 34 s after ~40 min), so only compare
+#    runs from the same session.
+#
+# 3. Inside ceiling (first number of [limits]). Keep 4 if it is clearly faster than 2 and the peak still leaves
+#    min_free_pct free with your agents running; otherwise use 2. Going above 4 rarely helps: the suites we measured
+#    stopped getting faster there while memory kept growing.
+#
+# 4. Outside ceiling (second number). Half of the inside one: several agents may iterate at the same time.
+#
+# 5. max_agents. Replace the constants of the formula with yours:
+#      max_agents = floor((RAM - idle_usage - suite_peak) / per_agent)
+#    where idle_usage comes from step 1, suite_peak from step 2 and per_agent is what one agent session plus its
+#    tooling uses on your projects (watch throttle-load before and after launching one).
+#
+# 6. Watch the weekly report (`throttle-report`) for a couple of weeks: minutes in red pressure with many sessions,
+#    p95 of the wait for the slot, and guard blocks by rule. Adjust one number at a time.
