@@ -47,6 +47,8 @@ playwright = [2, 1]
 
 [guard]
 # package.json scripts that always count as heavy (full type-check, full lint + tests): only inside solo.
+# The hook skips Python for commands without any of these words: test, check, validate, typecheck, lint, e2e, tsc,
+# jest, playwright. A script name here must contain one of them (e.g. "lint:all", not "ci-full").
 heavy_scripts = ["validate:local", "typecheck"]
 # One TSV line per block in <logs.dir>/guard-blocks.log (the command is truncated and secrets are masked).
 log_blocks = true

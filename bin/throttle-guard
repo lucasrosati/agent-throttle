@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# throttle-guard: PreToolUse(Bash) hook for Claude Code (reads the hook JSON on stdin; exit 2 = blocked, reason on
+# stderr), and manual check: throttle-guard --check '<command>' [--cwd DIR].
+# Fast path in bash: a command without any trigger word exits without starting Python.
+PYTHON=${AT_PYTHON:-python3}   # install.sh pins the interpreter found at install time here
+
+src=${BASH_SOURCE[0]}
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd); src=$(readlink "$src")
+  case $src in /*) ;; *) src=$dir/$src ;; esac
+done
+root=$(cd -P "$(dirname "$src")/.." && pwd)
+
+if [ "${1:-}" = --check ]; then
+  exec "$PYTHON" "$root/lib/agent_throttle/guard.py" "$@"
+fi
+input=$(cat)
+case "$input" in
+  *jest*|*test*|*tsc*|*validate*|*typecheck*|*check*|*lint*|*e2e*|*playwright*|*PWDEBUG*|*PWTEST*) ;;
+  *) exit 0 ;;
+esac
+printf '%s' "$input" | "$PYTHON" "$root/lib/agent_throttle/guard.py"
