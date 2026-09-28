@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# solo-ci: push the current branch and use the pull request CI as the final validation
+# (`gh pr checks --watch --fail-fast`), with a short summary. Meant for when the local `solo` queue is long (the
+# agent rules say: more than 10 minutes waiting). Never force-pushes, never pushes main/master.
+#
+# Settings: [semaphore.ci] in the config; env SOLO_CI_TIMEOUT, SOLO_CI_INTERVAL and SOLO_CI_MIN_CHECKS override.
+# Minimum number of checks per repository: git config agent-throttle.minchecks N (a green result with fewer checks
+# than expected is not an approval: a workflow that did not start does not show up as failed).
+# Exit: 0 = all green · 1 = a check failed · 2 = refused before pushing · 3 = green with fewer checks than the minimum ·
+#       4 = no open pull request · 5 = push rejected · 124 = timeout.
+
+src=${BASH_SOURCE[0]}
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd); src=$(readlink "$src")
+  case $src in /*) ;; *) src=$dir/$src ;; esac
+done
+here=$(cd -P "$(dirname "$src")" && pwd)
+cfg=$("$here/throttle-config" shell 2>/dev/null) && eval "$cfg"
+
+TIMEOUT=${SOLO_CI_TIMEOUT:-${AT_SEMAPHORE_CI_TIMEOUT_S:-3600}}
+INTERVAL=${SOLO_CI_INTERVAL:-${AT_SEMAPHORE_CI_INTERVAL_S:-30}}
+MIN=${SOLO_CI_MIN_CHECKS:-$(git config --get agent-throttle.minchecks 2>/dev/null || echo "${AT_SEMAPHORE_CI_MIN_CHECKS:-0}")}
+LOG=${AT_LOG_SEMAPHORE:-$HOME/.local/state/agent-throttle/semaphore.log}
+say() { echo "[solo-ci] $*"; }
+start=$(date +%s)
+
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || { say "not inside a git repository"; exit 2; }
+case "$branch" in
+  HEAD) say "detached HEAD: check out a branch"; exit 2 ;;
+  main|master) say "refused: I do not push $branch"; exit 2 ;;
+esac
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  say "tracked changes are not committed: commit first (CI validates what is on the remote)"; exit 2
+fi
+command -v gh >/dev/null 2>&1 || { say "the GitHub CLI (gh) is required"; exit 2; }
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/solo-ci.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+say "pushing $branch (no force)"
+if ! git push -q -u origin "$branch" 2>"$tmp/push.err"; then
+  say "push rejected; nothing was forced. Reason:"; sed 's/^/  /' "$tmp/push.err" | head -5
+  say "if the remote branch moved, fetch + rebase and run again"; exit 5
+fi
+head=$(git rev-parse HEAD)
+
+info=$(gh pr view --json number,state,headRefOid --jq '"\(.number) \(.state) \(.headRefOid)"' 2>/dev/null)
+[ -z "$info" ] && { say "no pull request for $branch: open one with gh pr create and run again"; exit 4; }
+read -r pr state prhead <<<"$info"
+[ "$state" != OPEN ] && { say "pull request #$pr is $state"; exit 4; }
+
+# GitHub takes a few seconds to see the push and register the checks of the new head
+for _ in $(seq 1 20); do
+  [ "$prhead" = "$head" ] && break
+  sleep 3; prhead=$(gh pr view "$pr" --json headRefOid --jq .headRefOid 2>/dev/null)
+done
+for _ in $(seq 1 30); do
+  n=$(gh pr checks "$pr" --json name --jq 'length' 2>/dev/null); [ "${n:-0}" -gt 0 ] && break; sleep 3
+done
+say "PR #$pr · head ${head:0:8} · waiting for CI (timeout ${TIMEOUT}s, fail-fast)"
+
+# perl's alarm works on macOS and Linux (macOS has no `timeout`); the subshell keeps "Alarm clock" out of the summary
+( perl -e 'alarm shift; exec @ARGV' "$TIMEOUT" \
+  gh pr checks "$pr" --watch --fail-fast --interval "$INTERVAL"; exit $? ) > "$tmp/watch.log" 2>&1
+rc=$?
+[ $rc -eq 142 ] && rc=124   # SIGALRM from perl
+
+summary=$(gh pr checks "$pr" --json name,bucket,link \
+  --jq '(group_by(.bucket) | map("\(length) \(.[0].bucket)") | join(", ")), (.[] | select(.bucket != "pass" and .bucket != "skipping") | "  \(.bucket): \(.name) \(.link)")' 2>/dev/null)
+total=$(gh pr checks "$pr" --json name --jq 'length' 2>/dev/null); total=${total:-0}
+dur=$(( $(date +%s) - start ))
+
+if [ $rc -eq 0 ] && [ "$total" -lt "$MIN" ]; then
+  say "green, but only $total checks (minimum $MIN): absence is not approval"; rc=3
+fi
+say "rc=$rc in ${dur}s · $total checks: $(echo "$summary" | head -1)"
+echo "$summary" | tail -n +2
+mkdir -p "$(dirname "$LOG")" 2>/dev/null
+[ -s "$LOG" ] || printf 'date\twait_s\tduration_s\trc\tcwd\tcommand\tnote\n' >> "$LOG"
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%F %T')" "" "$dur" "$rc" "$PWD" "ci PR #$pr ${head:0:8}" "ci" >> "$LOG"
+exit $rc
