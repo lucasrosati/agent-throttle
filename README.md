@@ -103,7 +103,8 @@ of the repository.
 | `throttle-load` | yes | not yet |
 | scheduled jobs | launchd | not yet (systemd timers welcome) |
 
-Tested with Claude Code 2.1 and the Codex CLI 0.15. CI runs every test on `ubuntu-latest` and `macos-latest`.
+Built for Claude Code 2.1 (the hook) and the Codex CLI 0.15 (rules only, no hook). CI runs every test on
+`ubuntu-latest` and `macos-latest`.
 
 ## Known limitations
 

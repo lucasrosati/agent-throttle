@@ -105,7 +105,8 @@ repositório fora do repositório.
 | `throttle-load` | sim | ainda não |
 | jobs agendados | launchd | ainda não (timers do systemd são bem-vindos) |
 
-Testado com o Claude Code 2.1 e o Codex CLI 0.15. O CI roda todos os testes em `ubuntu-latest` e `macos-latest`.
+Feito para o Claude Code 2.1 (o hook) e o Codex CLI 0.15 (só regras, sem hook). O CI roda todos os testes em
+`ubuntu-latest` e `macos-latest`.
 
 ## Limitações conhecidas
 
