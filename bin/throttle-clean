@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# throttle-clean: end-of-day cleanup, from any folder inside a git repository. Prunes stale worktrees, deletes build
+# artifacts inside the worktree folders ([clean] worktree_dirs / artifact_dirs) and offers to kill leftover test
+# processes ([clean] process_regex; asks first, and never kills when stdin is not a terminal).
+
+src=${BASH_SOURCE[0]}
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd); src=$(readlink "$src")
+  case $src in /*) ;; *) src=$dir/$src ;; esac
+done
+here=$(cd -P "$(dirname "$src")" && pwd)
+cfg=$("$here/throttle-config" shell 2>/dev/null) && eval "$cfg"
+WORKTREE_DIRS=${AT_CLEAN_WORKTREE_DIRS:-.claude/worktrees .worktrees}
+ARTIFACT_DIRS=${AT_CLEAN_ARTIFACT_DIRS:-.next coverage}
+PROC_RE=${AT_CLEAN_PROCESS_REGEX:-jest|vitest|tsc --noEmit}
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "run inside a git repository"; exit 1; }
+cd "$root" || exit 1
+git worktree prune -v
+
+names=()
+for a in $ARTIFACT_DIRS; do names+=(${names[0]+-o} -name "$a"); done
+for d in $WORKTREE_DIRS; do
+  [ -d "$d" ] && [ ${#names[@]} -gt 0 ] && find "$d" -maxdepth 3 -type d \( "${names[@]}" \) -prune -print -exec rm -rf {} +
+done
+
+pids=$(pgrep -f "$PROC_RE" | grep -v "^$$\$")
+echo "Test processes still alive ($PROC_RE):"
+if [ -z "$pids" ]; then
+  echo "none"
+else
+  # shellcheck disable=SC2086 # one PID per word
+  ps -o pid=,command= -p "$(echo $pids | tr ' ' ',')"
+  if [ -t 0 ]; then
+    read -r -p "Kill the processes listed above? [y/N] " a
+    # shellcheck disable=SC2086
+    [ "$a" = y ] && kill $pids
+  else
+    echo "(stdin is not a terminal: nothing killed)"
+  fi
+fi
+df -h . | tail -1

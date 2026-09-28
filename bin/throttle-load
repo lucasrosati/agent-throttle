@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# throttle-load: memory snapshot before launching an agent, with a verdict: "ok to launch" or "DO NOT launch" (free
+# memory below [load] min_free_pct or swap above max_swap_mb).
+# throttle-load --log: quiet mode for launchd (every 5 min). Appends one TSV line to <logs.dir>/load.log: date,
+# free_pct, pressure, swap_mb, agent_sessions, test_procs, semaphore_busy. Only sysctl + one ps: well under 1 s.
+# free_pct = kern.memorystatus_level (the same number as the last line of memory_pressure); pressure =
+# kern.memorystatus_vm_pressure_level (1 green, 2 yellow, 4 red). agent_sessions = processes whose executable is named
+# like [load] agent_processes; test_procs = processes matching [load] test_process_regex.
+# macOS only in v0.1.0 (memory_pressure and the kern.memorystatus sysctls); Linux support is welcome.
+
+src=${BASH_SOURCE[0]}
+while [ -L "$src" ]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd); src=$(readlink "$src")
+  case $src in /*) ;; *) src=$dir/$src ;; esac
+done
+here=$(cd -P "$(dirname "$src")" && pwd)
+
+case "${1:-}" in
+  -h|--help) echo "usage: throttle-load [--log]"; exit 0 ;;
+  ''|--log) ;;
+  *) echo "usage: throttle-load [--log]" >&2; exit 64 ;;
+esac
+if [ "$(uname -s)" != Darwin ]; then
+  echo "throttle-load: macOS only in v0.1.0 (it reads memory_pressure and kern.memorystatus). Linux support is a welcome contribution: see CONTRIBUTING.md." >&2
+  exit 3
+fi
+cfg=$("$here/throttle-config" shell 2>/dev/null) && eval "$cfg"
+MIN_FREE=${AT_LOAD_MIN_FREE_PCT:-25}
+MAX_SWAP=${AT_LOAD_MAX_SWAP_MB:-3072}
+MAX_AGENTS=${AT_LOAD_MAX_AGENTS:-3}
+NAMES=${AT_LOAD_AGENT_PROCESSES:-claude codex}
+TEST_RE=${AT_LOAD_TEST_PROCESS_REGEX:-jest|vitest|pytest|playwright|(^|[/ ])tsc( |$)}
+LOCK=${AT_SEMAPHORE_LOCK_DIR:-/tmp/agent-throttle.lock}
+LOG=${AT_LOG_LOAD:-$HOME/.local/state/agent-throttle/load.log}
+
+count_procs() { # "<agent sessions> <test processes>"
+  /bin/ps -Axo comm=,args= | /usr/bin/awk -v names="$NAMES" -v re="$TEST_RE" '
+    BEGIN { n = split(names, list, " "); for (i = 1; i <= n; i++) agent[list[i]] = 1 }
+    { k = split($1, part, "/"); name = part[k] }
+    name ~ /^-?(awk|grep|zsh|bash|sh)$/ { next }  # a shell with "jest" in its command line does not count
+    (name in agent) && $0 !~ /--chrome-native-host/ { a++ }
+    $0 ~ re { t++ }
+    END { printf "%d %d", a, t }'
+}
+
+if [ "${1:-}" = --log ]; then
+  free=$(/usr/sbin/sysctl -n kern.memorystatus_level)
+  case $(/usr/sbin/sysctl -n kern.memorystatus_vm_pressure_level) in
+    1) pressure=green ;; 2) pressure=yellow ;; 4) pressure=red ;; *) pressure=unknown ;;
+  esac
+  swap=$(/usr/sbin/sysctl -n vm.swapusage | sed -E 's/.*used = ([0-9]+)(\.[0-9]+)?M.*/\1/')
+  read -r sessions tests <<EOF
+$(count_procs)
+EOF
+  [ -d "$LOCK" ] && busy=yes || busy=no
+  mkdir -p "$(dirname "$LOG")" 2>/dev/null
+  [ -s "$LOG" ] || printf 'date\tfree_pct\tpressure\tswap_mb\tagent_sessions\ttest_procs\tsemaphore_busy\n' >> "$LOG"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%F %T')" "$free" "$pressure" "$swap" "$sessions" "$tests" "$busy" >> "$LOG"
+  exit 0
+fi
+
+free=$(memory_pressure | tail -1 | grep -oE '[0-9]+%' | tr -d %)
+swap_used=$(sysctl -n vm.swapusage | sed -E 's/.*used = ([0-9.]+)M.*/\1/')
+read -r sessions tests <<EOF
+$(count_procs)
+EOF
+echo "== Free memory: ${free}%  (launch threshold: ${MIN_FREE}%)"
+echo "== Swap: $(sysctl -n vm.swapusage)  (threshold: ${MAX_SWAP} MB used)"
+echo "== Agent processes ($NAMES): $sessions  (agents coding at once: up to $MAX_AGENTS)"
+echo "== Top apps (GB):"
+ps -Axo rss=,comm= | awk '{r=$1; $1=""; n=$0; sub(/^ +/,"",n); sub(".*/","",n); m[n]+=r}
+  END{for(k in m) printf "%6.2f  %s\n", m[k]/1048576, k}' | sort -rn | head -10
+echo "== Test processes and dev servers by worktree (GB):"
+ps -Axo rss=,command= | awk -v re="$TEST_RE|next" '$0 ~ re && $0 !~ /awk -v re=/ {w="main";
+  if (match($0,/worktrees\/[^\/ ]+/)) w=substr($0,RSTART+10,RLENGTH-10); s[w]+=$1}
+  END{for(k in s) printf "%6.2f  %s\n", s[k]/1048576, k}'
+[ -d "$LOCK" ] && echo "== solo busy: $(cat "$LOCK/cmd" 2>/dev/null)"
+if [ "${free:-0}" -lt "$MIN_FREE" ] || awk -v u="$swap_used" -v m="$MAX_SWAP" 'BEGIN{exit !(u > m)}'; then
+  echo "== VERDICT: DO NOT launch a new agent (free < ${MIN_FREE}% or swap > ${MAX_SWAP} MB)"
+else
+  echo "== VERDICT: ok to launch (up to $MAX_AGENTS agents coding; heavy validation only through solo)"
+fi
