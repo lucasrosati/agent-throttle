@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # the minimum supported version (tomllib)
+      - name: Guard rules
+        run: python3 tests/guard_cases.py
+      - name: Config and hook
+        run: python3 tests/config_cases.py
+      - name: Semaphore (solo)
+        run: bash tests/semaphore_cases.sh
+      - name: solo-ci refusals
+        run: bash tests/solo_ci_cases.sh
+      - name: Tools (report, logrotate, load, clean)
+        run: python3 tests/tools_cases.py
+      - name: Install and uninstall (temporary HOME)
+        run: bash tests/install_cases.sh
+      - name: Leak check cases
+        run: bash tests/leak_cases.sh
+      - name: Mutants
+        run: bash tests/mutants.sh
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck bin/solo bin/solo-ci bin/throttle-guard bin/throttle-load bin/throttle-clean install.sh uninstall.sh tests/*.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: ruff
+        run: pipx run ruff check . bin/throttle-config bin/throttle-report bin/throttle-logrotate
+
+  leak-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Public leak patterns over the tree and the whole history
+        run: python3 scripts/leak_check.py --history

@@ -11,7 +11,7 @@ Thanks for helping. Issues and pull requests are welcome, especially:
 
 ## Running the tests
 
-No dependencies besides bash, git and Python 3.11+.
+No dependencies besides bash, git and Python 3.11+. `bash tests/run_all.sh` runs everything below, as CI does.
 
 ```bash
 python3 tests/guard_cases.py        # the guard's rules (255 cases)
