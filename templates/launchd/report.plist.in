@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  agent-throttle: weekly report every Monday at 08:00, for the ISO week that ended on Sunday (--last-week).
+  PATH includes the Homebrew folders for `gh` (pull request count, only when [report] repos_dir is set) and /usr/bin
+  for `git`. StartCalendarInterval runs at wake-up if the Mac was asleep at the scheduled time.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL_PREFIX@.report</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@PYTHON@</string>
+    <string>@BIN@/throttle-report</string>
+    <string>--last-week</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>AGENT_THROTTLE_CONFIG</key>
+    <string>@CONFIG@</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>8</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>@LOG_DIR@/report.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG_DIR@/report.log</string>
+</dict>
+</plist>

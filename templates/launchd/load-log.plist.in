@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  agent-throttle: one memory sample every 5 min (`throttle-load --log`, well under 1 s).
+  The system bash and a minimal PATH are enough: --log only uses sysctl, ps, awk, sed and date.
+  A run due while the Mac sleeps is skipped, not queued (man launchd.plist, StartInterval); throttle-report handles gaps.
+  Rendered and loaded by install.sh --launchd.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL_PREFIX@.load-log</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@BIN@/throttle-load</string>
+    <string>--log</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>AGENT_THROTTLE_CONFIG</key>
+    <string>@CONFIG@</string>
+  </dict>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>@LOG_DIR@/load-log.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG_DIR@/load-log.log</string>
+</dict>
+</plist>

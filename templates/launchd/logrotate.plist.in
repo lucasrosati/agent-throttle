@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  agent-throttle: daily rotation of the logs ([logs] retention_days).
+  The Python interpreter is the one install.sh found (3.11 or newer), by absolute path: the system Python of older
+  macOS releases is too old for tomllib, and launchd does not read your shell profile.
+  StartCalendarInterval runs at wake-up if the Mac was asleep at the scheduled time (man launchd.plist).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@LABEL_PREFIX@.logrotate</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@PYTHON@</string>
+    <string>@BIN@/throttle-logrotate</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AGENT_THROTTLE_CONFIG</key>
+    <string>@CONFIG@</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>17</integer>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>@LOG_DIR@/logrotate.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG_DIR@/logrotate.log</string>
+</dict>
+</plist>
