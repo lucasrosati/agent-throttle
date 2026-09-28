@@ -152,7 +152,7 @@ def week_bounds(label):
 
 def dead_sessions(samples, swap_high):
     events = []
-    for a, b in zip(samples, samples[1:]):
+    for a, b in zip(samples, samples[1:], strict=False):
         if b['t'] - a['t'] > GAP_MAX:
             continue
         drop = a['sess'] - b['sess']
@@ -297,7 +297,7 @@ def build(a, cfg):
         w(f'- **Dead sessions:** {n_dead}. Rule: {DROP_MIN} or more agent processes fewer between two consecutive samples '
           f'(up to {int(GAP_MAX.total_seconds() // 60)} min apart) with swap >= {swap_high} MB or red pressure in one of '
           'them. Closing sessions by hand while swap is high also counts: check the events.')
-        for x, y, d in deaths:
+        for x, y, _drop in deaths:
             w(f'  - {when(x["t"])} -> {y["t"]:%H:%M}: {x["sess"]} -> {y["sess"]} processes, swap '
               f'{fmt_n(max(x["swap"], y["swap"]) / 1024)} GB, pressure {x["pressure"]} -> {y["pressure"]}')
         w(f'- **Pressure:** {fmt_n(red, 0)} min red, {fmt_n(yellow, 0)} min yellow.')
@@ -357,7 +357,7 @@ def build(a, cfg):
         w('')
         slugs = gh_repos(a.repos_dir)
         with ThreadPoolExecutor(max_workers=6) as ex:
-            res = dict(zip(slugs, ex.map(lambda s: gh_prs(s, start, end), slugs)))
+            res = dict(zip(slugs, ex.map(lambda s: gh_prs(s, start, end), slugs), strict=True))
         w('| Repository | Folder | Opened this week | Merged this week |')
         w('|---|---|---|---|')
         tot_o = tot_m = 0

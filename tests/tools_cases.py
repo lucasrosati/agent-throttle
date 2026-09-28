@@ -39,7 +39,7 @@ t0 = dt.datetime(2026, 3, 3, 9, 0)
 load = ['date\tfree_pct\tpressure\tswap_mb\tagent_sessions\ttest_procs\tsemaphore_busy']
 sess = [2, 3, 4, 6, 6, 3, 3, 2]  # 6 -> 3 with red pressure = one dead-session event (3 processes)
 press = ['green', 'green', 'yellow', 'red', 'red', 'yellow', 'green', 'green']
-for i, (s, p) in enumerate(zip(sess, press)):
+for i, (s, p) in enumerate(zip(sess, press, strict=True)):
     t = t0 + dt.timedelta(minutes=5 * i)
     load.append(f'{t:%Y-%m-%d %H:%M:%S}\t{40 - 3 * i}\t{p}\t{1000 + 400 * i}\t{s}\t1\t{"yes" if i == 3 else "no"}')
 with open(os.path.join(LOGS, 'load.log'), 'w') as fh:
