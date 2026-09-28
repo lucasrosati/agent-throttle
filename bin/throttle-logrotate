@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""throttle-logrotate: keep only the last N days of the logs (run with --help)."""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, 'lib'))
+from agent_throttle.logrotate import main  # noqa: E402
+
+sys.exit(main())
