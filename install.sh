@@ -52,7 +52,7 @@ done
 say() { echo "[install] $*"; }
 die() { echo "[install] error: $*" >&2; exit 1; }
 src=$(cd "$(dirname "$0")" && pwd -P)
-[ -f "$src/bin/solo" ] && [ -f "$src/lib/agent_throttle/guard.py" ] || die "run install.sh from the agent-throttle folder"
+if [ ! -f "$src/bin/solo" ] || [ ! -f "$src/lib/agent_throttle/guard.py" ]; then die "run install.sh from the agent-throttle folder"; fi
 case "$DATA" in */agent-throttle) ;; *) die "--data-dir must end with /agent-throttle (it is replaced on every install)" ;; esac
 mkdir -p "$DATA"
 [ "$(cd "$DATA" && pwd -P)" != "$src" ] || die "--data-dir cannot be the source folder"

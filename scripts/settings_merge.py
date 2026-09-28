@@ -6,7 +6,8 @@ usage: settings_merge.py add|remove --settings PATH --command COMMAND
 - Our hook is any PreToolUse hook whose command's first word is named `throttle-guard`. `add` keeps exactly one,
   with the given command, under a "Bash" matcher (an old one from another prefix is replaced); `remove` drops ours
   and only the groups that became empty because of it.
-- Before any change the file is copied to <settings>.bak-agent-throttle-YYYYmmdd-HHMMSS. No change, no backup.
+- Before any change the file is copied to <settings>.bak-agent-throttle-YYYYmmdd-HHMMSS (with -1, -2... if that
+  name is taken: a backup is never overwritten). No change, no backup.
 - The new file is written atomically and read back to confirm it is valid JSON.
 - A settings file that is not valid JSON (or has an unexpected shape) is left untouched: exit 3.
 """
@@ -117,7 +118,10 @@ def main(argv=None):
         new.pop('hooks', None)
     if exists:
         stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-        backup = f'{a.settings}.bak-agent-throttle-{stamp}'
+        backup, n = f'{a.settings}.bak-agent-throttle-{stamp}', 0
+        while os.path.exists(backup):  # two changes in the same second must not overwrite the first backup
+            n += 1
+            backup = f'{a.settings}.bak-agent-throttle-{stamp}-{n}'
         shutil.copy2(a.settings, backup)
         print(f'backup: {backup}')
     write(a.settings, new)

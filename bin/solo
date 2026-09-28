@@ -97,7 +97,7 @@ until mkdir "$LOCK" 2>/dev/null; do
 done
 echo $$ > "$LOCK/pid"; echo "$PWD :: $*" > "$LOCK/cmd"
 child=""; watchdog=""
-# shellcheck disable=SC2046,SC2329 # one PID per word; called by the trap below
+# shellcheck disable=SC2046,SC2317,SC2329 # one PID per word; called by the trap below
 on_signal() { [ -n "$child" ] && kill_tree "$child"; [ -n "$watchdog" ] && kill -TERM $(descendants "$watchdog") 2>/dev/null; exit 130; }
 trap 'rm -rf "$LOCK"' EXIT
 trap on_signal INT TERM HUP

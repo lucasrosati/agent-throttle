@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016,SC2034,SC2329 # checks are strings passed to eval: variables expand there
+# shellcheck disable=SC2016,SC2034,SC2317,SC2329 # checks are strings passed to eval: variables expand there
 # Test battery for bin/solo. Usage: bash tests/semaphore_cases.sh (rc=0 = every case passed; takes ~25 s).
 # Runs solo with a config that puts the lock and the log in a temporary directory (never the real lock or log) and a
 # 1 s poll. Mutant: SOLO_PATH=<modified copy of bin/solo, next to a throttle-config> bash tests/semaphore_cases.sh.

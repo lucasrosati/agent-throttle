@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2016,SC2034,SC2329 # checks are strings passed to eval: variables and helpers are used there
+# shellcheck disable=SC2016,SC2034,SC2317,SC2329 # checks are strings passed to eval: variables and helpers are used there
 # Cases for install.sh and uninstall.sh, each in a temporary HOME (never your real one): settings.json with other hooks,
 # idempotence, kept config, conflicts, invalid JSON, launchd rendering (macOS, launchctl replaced by a stub), uninstall
 # and --purge. Usage: bash tests/install_cases.sh (rc=0 = every case passed).
@@ -91,6 +91,14 @@ new_home h2
 "$REPO/install.sh" --python "$PYTHON_BIN" > /dev/null 2>&1
 "$REPO/install.sh" --python "$PYTHON_BIN" --prefix "$HOME/bin2" > "$ROOT/i3" 2>&1; rc=$?
 ok 'new prefix: hook replaced, one entry, new path' '[ $rc = 0 ] && grep -q "hook replaced" "$ROOT/i3" && [ "$(grep -c throttle-guard "$(S)")" = 1 ] && grep -q "$HOME/bin2/throttle-guard" "$(S)"'
+
+# ---------------------------------------------------------------- two changes in the same second keep both backups
+new_home h2b
+S2=$(S)
+"$PYTHON_BIN" "$REPO/scripts/settings_merge.py" add --settings "$S2" --command /x/throttle-guard > /dev/null
+"$PYTHON_BIN" "$REPO/scripts/settings_merge.py" remove --settings "$S2" > /dev/null
+"$PYTHON_BIN" "$REPO/scripts/settings_merge.py" add --settings "$S2" --command /x/throttle-guard > /dev/null
+ok 'backups never overwrite each other (3 changes, 3 backups; the first one is the original)' '[ "$(backups)" = 3 ] && json_eq "$(find "$HOME/.claude" -name "settings.json.bak-agent-throttle-*" | sort | head -1)" "$ROOT/h2b.original.json"'
 
 # ---------------------------------------------------------------- conflicts and refusals
 new_home h3

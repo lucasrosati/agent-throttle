@@ -21,5 +21,5 @@ First public version.
 - `config.toml` with documented defaults, `max_agents` derived from total RAM, and a calibration guide.
 - `install.sh` / `uninstall.sh`: idempotent, hook merged into Claude Code settings with a backup, optional launchd jobs.
 - Rule templates for `~/.claude/CLAUDE.md` and Codex `AGENTS.md`.
-- Tests: guard (255 cases), config and hook (31), semaphore (18), solo-ci (6), tools (22), install (31), leak check
+- Tests: guard (255 cases), config and hook (31), semaphore (18), solo-ci (6), tools (22), install (32), leak check
   (12), and 11 mutants with an unmodified control. CI on Ubuntu and macOS, shellcheck, ruff, public leak check.
