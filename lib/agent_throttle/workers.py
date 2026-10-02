@@ -1,4 +1,5 @@
 """Lower worker flags without evaluating command text. The CLI returns NUL-delimited argv."""
+import os
 import re
 import sys
 from pathlib import Path
@@ -28,7 +29,7 @@ def runner(argv):
             return None
         if re.fullmatch(r'python(?:\d+(?:\.\d+)?)?', head):
             return 'pytest' if '-m' in words and words[words.index('-m') + 1:][:1] in (['pytest'], ['py.test']) else None
-        if head in ('npm', 'pnpm', 'yarn') and 'run' in words or head == 'npm' and 'test' in words:
+        if head in ('npm', 'pnpm', 'yarn') and ('run' in words or head == 'npm' and words[1:2] in (['test'], ['t'], ['tst'])):
             return 'forwarded' if '--' in words else None
         if head in ('npx', 'env', 'uv', 'poetry', 'pnpm', 'yarn', 'npm'):
             words = words[1:]
@@ -68,12 +69,16 @@ def rewrite(argv, w, cores, wpw):
         arg = argv[i]
         name, eq, val = arg.partition('=')
         if i >= start and name in flags and eq:
-            out.append(name + '=' + lowered(name, val)); seen = True
+            out.append(name + '=' + lowered(name, val))
+            seen = True
         elif i >= start and name in flags and i + 1 < len(argv):
-            out.extend((arg, lowered(arg, argv[i + 1]))); seen = True; i += 1
+            out.extend((arg, lowered(arg, argv[i + 1])))
+            seen = True
+            i += 1
         elif i >= start and kind in ('jest', 'playwright', 'pytest') and re.fullmatch(
                 r'(-w|-j|-n)\d+%?', arg) and arg[:2] in flags:
-            out.append(arg[:2] + lowered(arg[:2], arg[2:])); seen = True
+            out.append(arg[:2] + lowered(arg[:2], arg[2:]))
+            seen = True
         else:
             out.append(arg)
             if kind == 'jest' and arg in ('--runInBand', '-i'):
@@ -89,5 +94,5 @@ def rewrite(argv, w, cores, wpw):
 if __name__ == '__main__':
     w, c, pw = (int(x) for x in sys.argv[1:4])
     args, changes = rewrite(sys.argv[4:], w, c, pw)
-    Path(__import__('os').environ['SOLO_SLOT_DIR'], 'argvnote').write_text('; '.join(changes), encoding='utf-8')
+    Path(os.environ['SOLO_SLOT_DIR'], 'argvnote').write_text('; '.join(changes), encoding='utf-8')
     sys.stdout.buffer.write(b''.join(arg.encode() + b'\0' for arg in args))

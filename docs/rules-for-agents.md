@@ -11,7 +11,7 @@ see: whether to launch another agent, what to do when the queue is long, cleanin
 | Codex CLI | `~/.codex/AGENTS.md` | [`templates/agents-md-rules.md`](../templates/agents-md-rules.md) |
 
 `install.sh` copies both templates to `~/.local/share/agent-throttle/templates/` but does not edit your instruction
-files. If you changed `[limits]` or `max_agents`, update the numbers in the block you paste.
+files. If you changed `[limits]` or `max_agents`, update the block you paste. Use `throttle-config get limits` and `throttle-config get load.max_agents` for effective ceilings; slots and W are derived at runtime.
 
 **Codex has no Claude Code hook**, so for Codex the rules are the only protection. The Codex block says so explicitly,
 which makes agents take it more seriously.

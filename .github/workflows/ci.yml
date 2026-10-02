@@ -29,6 +29,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Old and extended logs
+        run: python3 tests/log_cases.py
       - name: Portable load verdict
         run: python3 tests/load_cases.py
       - name: Lock identity

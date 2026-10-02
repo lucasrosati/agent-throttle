@@ -45,11 +45,16 @@ B='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/gate_cases.py"'
 I='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/semaphore_runtime_cases.py"'
 D='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/identity_cases.py"'
 L='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/load_cases.py"'
+R='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/log_cases.py"'
 GUARD=lib/agent_throttle/guard.py
 
 # control: an unmodified copy must pass both batteries, or a "killed" below would prove nothing
 COPY=$T/control; mkdir -p "$COPY"; cp -R "$REPO/bin" "$REPO/lib" "$REPO/config" "$COPY/"
-if COPY=$COPY eval "$G" > "$T/control.out" 2>&1 && COPY=$COPY eval "$S" >> "$T/control.out" 2>&1; then
+control_ok=1
+for battery in "$G" "$S" "$M" "$W" "$B" "$C" "$I" "$D" "$L" "$R"; do
+  if ! COPY=$COPY eval "$battery" >> "$T/control.out" 2>&1; then control_ok=0; fi
+done
+if [ "$control_ok" = 1 ]; then
   echo "control  unmodified copy passes"
 else
   echo "CONTROL FAILED: the unmodified copy does not pass"; tail -5 "$T/control.out"; exit 2
@@ -152,6 +157,20 @@ check load-swap-warning-ignored lib/agent_throttle/load.py \
   "if swap is not None and ram and swap > ram / 2**20 / settings['swap_warn_ram_divisor']:" 'if False:' "$L"
 check load-window-last-sample lib/agent_throttle/load.py \
   'return current - previous' 'return 0' "$L"
+
+check new-log-fields-dropped lib/agent_throttle/report.py \
+  'rows.append([ts(parts[0])] + parts[1:])' 'rows.append([ts(parts[0])] + parts[1:7])' "$R"
+check sampler-disabled bin/solo \
+  'measured=$(tree_rss_mb "$child")' 'measured=0' "$I"
+check wait-reason-unlogged bin/solo \
+  '"$(sanitize "$WAIT_REASON")"' '""' "$I"
+check origin-missing bin/solo \
+  '"$(origin)"' '""' "$I"
+check load-extra-columns-missing lib/agent_throttle/load.py \
+  ", codex, f'{busy}/{slots}', workers]" ']' "$L"
+
+check gate-too-few-samples lib/agent_throttle/gate.py \
+  'if len(samples) < 5:' 'if len(samples) < 4:' "$B"
 
 echo "$killed killed, $survived survived, $broken broken"
 [ $survived = 0 ] && [ $broken = 0 ]

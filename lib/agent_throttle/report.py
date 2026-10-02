@@ -44,18 +44,27 @@ def read_tsv(path, ncols):
         if len(parts) < ncols:
             continue
         try:
-            rows.append([ts(parts[0])] + parts[1:ncols - 1] + ['\t'.join(parts[ncols - 1:])])
+            rows.append([ts(parts[0])] + parts[1:])
         except ValueError:
             continue
     return rows
 
 
+def optional_int(row, index):
+    try:
+        return int(row[index])
+    except (IndexError, ValueError):
+        return None
+
+
 def read_load(path):
     out = []
-    for d, free, pressure, swap, sess, tests, busy in read_tsv(path, 7):
+    for row in read_tsv(path, 7):
+        d, free, pressure, swap, sess, tests, busy = row[:7]
         try:
             out.append(dict(t=d, free=int(free), pressure=pressure, swap=int(float(swap)), sess=int(sess),
-                            tests=int(tests), busy=busy.strip() == 'yes'))
+                            tests=int(tests), busy=busy.strip() == 'yes', codex_agents=optional_int(row, 7),
+                            slots=row[8] if len(row) > 8 else None, workers=optional_int(row, 9)))
         except ValueError:
             continue
     return out
@@ -63,17 +72,21 @@ def read_load(path):
 
 def read_semaphore(path):
     out = []
-    for d, wait, dur, rc, cwd, cmd, note in read_tsv(path, 7):
+    for row in read_tsv(path, 7):
+        d, wait, dur, rc, cwd, cmd, note = row[:7]
         try:
             out.append(dict(t=d, wait=int(wait) if wait.strip().isdigit() else None, dur=int(dur), rc=int(rc),
-                            cwd=cwd, cmd=cmd, note=note.strip()))
+                            cwd=cwd, cmd=cmd, note=note.strip(), slot=row[7] if len(row) > 7 else None,
+                            w=optional_int(row, 8), w_adjust=row[9] if len(row) > 9 else None,
+                            origin=row[10] if len(row) > 10 else None, peak_mb=optional_int(row, 11),
+                            wait_reason=row[12] if len(row) > 12 else None))
         except ValueError:
             continue
     return out
 
 
 def read_guard(path):
-    return [dict(t=d, cwd=cwd, rule=rule, cmd=cmd) for d, cwd, rule, cmd in read_tsv(path, 4)]
+    return [dict(t=d, cwd=cwd, rule=rule, cmd=cmd) for d, cwd, rule, cmd in (row[:4] for row in read_tsv(path, 4))]
 
 
 # ---------- classification ----------

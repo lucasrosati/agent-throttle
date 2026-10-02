@@ -31,6 +31,10 @@ with tempfile.TemporaryDirectory(prefix='gate-') as t:
             patch.object(gate.machine, 'memory', return_value=(50, 3000)):
         ok('no history requires RAM quarter', '4096 MB' in gate.reason(log, 25, 'auto'))
         log.write_text('\n'.join('2026-01-01 00:00:00\t0\t0\t0\tcwd\tcmd\t\t1/2\t8\t\tmanual\t' + str(x) for x in range(100, 600, 100)))
+        five_rows = log.read_text()
+        log.write_text('\n'.join(five_rows.splitlines()[:4]))
+        ok('fewer than five samples use RAM quarter', gate.required_mb(log, 16 * 2**30) == 4096)
+        log.write_text(five_rows)
         ok('five samples provide peak p90', gate.required_mb(log, 16 * 2**30) == 500)
         ok('history permits smaller free MB', gate.reason(log, 25, 'auto') == '')
         log.write_text('\n'.join('2026-01-01 00:00:00\t0\t0\t0\tcwd\tcmd\t\t1/2\t8\t\tmanual\t' + str(x)

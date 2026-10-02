@@ -10,8 +10,9 @@ from collections import defaultdict
 from pathlib import Path
 
 from . import config, machine
+from .logs import append
 
-HEADER = 'date\tfree_pct\tpressure\tswap_mb\tagent_sessions\ttest_procs\tsemaphore_busy'
+HEADER = 'date\tfree_pct\tpressure\tswap_mb\tagent_sessions\ttest_procs\tsemaphore_busy\tcodex_agents\tslots\tworkers'
 
 
 def snapshot(cfg):
@@ -70,7 +71,7 @@ def verdict(signals, cfg, delta):
         reasons.append('read failed: ' + ', '.join(sorted(missing)))
     procs = signals['processes']
     if procs is not None:
-        total, _ = count_agents(procs, settings)
+        total, codex = count_agents(procs, settings)
         if total >= settings['max_agents']:
             reasons.append(f'{total} agents >= {settings["max_agents"]}')
     free, pressure, swap = signals['free_pct'], signals['pressure'], signals['swap']
@@ -112,18 +113,15 @@ def slot_usage(cfg, signals):
 def write_sample(signals, cfg, now):
     path = Path(config.log_path(cfg, 'load'))
     path.parent.mkdir(parents=True, exist_ok=True)
-    total, _ = count_agents(signals['processes'], cfg['load']) if signals['processes'] is not None else (None, None)
+    total, codex = count_agents(signals['processes'], cfg['load']) if signals['processes'] is not None else (None, None)
     tests = sum(bool(re.search(cfg['load']['test_process_regex'], p['args']))
                 for p in signals['processes'] if p['name'].lstrip('-') not in ('awk', 'grep', 'bash', 'sh', 'zsh')) \
         if signals['processes'] is not None else None
-    busy, _, _ = slot_usage(cfg, signals)
+    busy, slots, workers = slot_usage(cfg, signals)
     row = [now.strftime('%Y-%m-%d %H:%M:%S'), int(signals['free_pct']) if signals['free_pct'] is not None else None,
            signals['pressure'] or 'unknown', int(signals['swap']) if signals['swap'] is not None else None,
-           total, tests, 'yes' if busy else 'no']
-    with open(path, 'a', encoding='utf-8') as fh:
-        if fh.tell() == 0:
-            fh.write(HEADER + '\n')
-        fh.write('\t'.join('' if v is None else str(v) for v in row) + '\n')
+           total, tests, 'yes' if busy else 'no', codex, f'{busy}/{slots}', workers]
+    append(path, HEADER, row)
 
 
 def main(argv=None):
@@ -143,7 +141,8 @@ def main(argv=None):
     print(f'== Machine: {signals["cores"] or "?"} cores, {ram / 2**30 if ram else "?"} GB (read live)')
     print(f'== Free memory: {signals["free_pct"] if signals["free_pct"] is not None else "?"}%'
           f'  pressure: {signals["pressure"] or "unknown"}')
-    print(f'== Swap: {signals["swap"] if signals["swap"] is not None else "?"} MB  delta: {delta if delta is not None else "?"} MB')
+    print(f'== Swap: {signals["swap"] if signals["swap"] is not None else "?"} MB'
+          f'  delta: {delta if delta is not None else "?"} MB')
     procs = signals['processes']
     agents, codex = count_agents(procs, cfg['load']) if procs is not None else ('?', '?')
     print(f'== Agents: {agents} total ({codex} codex), up to {cfg["load"]["max_agents"]}')

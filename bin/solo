@@ -6,9 +6,9 @@
 # the child's process tree before taking the slot. A watchdog enforces the timeout (config semaphore.timeout_s,
 # SOLO_TIMEOUT overrides), counted from the start of the command: waiting for the slot does not count. On timeout the
 # whole tree is killed, the slot is released and solo exits with 124 (note "timeout" in the log).
-# Log: one TSV line per run in <logs.dir>/semaphore.log: date, wait_s, duration_s, rc, cwd, command, note.
+# Log: the original seven TSV columns plus slot, w, w_adjust, origin, peak_mb, wait_reason.
 # Settings come from `throttle-config shell`; if it fails, the built-in defaults below apply (the lock never depends
-# on Python).
+# on Python; rewriting workers requires the configured Python interpreter).
 
 PYTHON=${AT_PYTHON:-python3}   # pinned by install.sh
 src=${BASH_SOURCE[0]}
@@ -137,6 +137,7 @@ while [ -z "$SLOT" ]; do
 done
 echo $$ > "$LOCK/pid"; started_at $$ > "$LOCK/pid_start"; echo "$PWD :: $*" > "$LOCK/cmd"
 OWNER_START=$(cat "$LOCK/pid_start")
+# shellcheck disable=SC2329 # invoked by the EXIT trap
 release() {
   if [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && [ "$(cat "$LOCK/pid_start" 2>/dev/null)" = "$OWNER_START" ]; then
     rm -rf "$LOCK"
@@ -159,18 +160,22 @@ PRELOAD=$ROOT/lib/agent_throttle/workers-preload.cjs
 export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require=\"$PRELOAD\""
 : > "$LOCK/wlog"
 echo "[solo] slot $SLOT/$S, W=$W (Playwright $WPW)"
-child=""; watchdog=""
+child=""; watchdog=""; sampler=""
 # shellcheck disable=SC2046,SC2317,SC2329 # one PID per word; called by the trap below
-on_signal() { [ -n "$child" ] && kill_tree "$child"; [ -n "$watchdog" ] && kill -TERM $(descendants "$watchdog") 2>/dev/null; exit 130; }
+on_signal() {
+  [ -n "$child" ] && kill_tree "$child"
+  for p in $watchdog $sampler; do kill -TERM $(descendants "$p") 2>/dev/null; done
+  exit 130
+}
 trap on_signal INT TERM HUP
 
-start=$(date +%s)
-wait_s=$(( start - t0 ))
 if ! "$PYTHON" "$ROOT/lib/agent_throttle/workers.py" "$W" "$C" "$WPW" "$@" > "$LOCK/argv"; then
   echo "[solo] worker rewrite failed; command not started" >&2; exit 70
 fi
 ARGS=()
 while IFS= read -r -d '' a; do ARGS+=("$a"); done < "$LOCK/argv"
+start=$(date +%s)
+wait_s=$(( start - t0 ))
 "${ARGS[@]}" <&0 &
 child=$!
 echo "$child" > "$LOCK/child"; started_at "$child" > "$LOCK/child_start"
@@ -187,18 +192,46 @@ watchdog_safe() {
   watchdog_safe || exit 0
   echo "$TIMEOUT" > "$LOCK/timeout"; kill_tree "$child" >/dev/null 2>&1 ) &
 watchdog=$!
+tree_rss_mb() {
+  ps -axo pid=,ppid=,rss= | awk -v root="$1" '{ par[$1]=$2; rss[$1]=$3 }
+    END { for (p in par) { x=p; depth=0; while (x != root && x in par && depth++ < 64) x=par[x]
+          if (x == root) sum += rss[p] } printf "%d", sum/1024 }'
+}
+printf '0\n' > "$LOCK/peak"
+( peak=0
+  while watchdog_safe; do
+    measured=$(tree_rss_mb "$child")
+    case "$measured" in ''|*[!0-9]*) measured=0 ;; esac
+    if [ "$measured" -gt "$peak" ]; then peak=$measured; printf '%s\n' "$peak" > "$LOCK/peak"; fi
+    sleep 2
+  done ) &
+sampler=$!
 wait "$child"; rc=$?
 # shellcheck disable=SC2046
-kill -TERM $(descendants "$watchdog") 2>/dev/null; wait "$watchdog" 2>/dev/null   # without kill_tree's 1 s wait
+for p in $watchdog $sampler; do kill -TERM $(descendants "$p") 2>/dev/null; wait "$p" 2>/dev/null; done
 note=""
 if [ -f "$LOCK/timeout" ]; then
   rc=124; note=timeout
   echo "[solo] TIMEOUT: over ${TIMEOUT}s (semaphore.timeout_s / SOLO_TIMEOUT); the command's tree was killed"
 fi
 dur=$(( $(date +%s) - start ))
+origin() {
+  local pid=$$ name count=0
+  while [ "$count" -lt 40 ]; do
+    pid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
+    case "$pid" in ''|*[!0-9]*|0|1) break ;; esac
+    name=$(ps -p "$pid" -o comm= 2>/dev/null)
+    case "${name##*/}" in claude*) echo claude; return ;; codex*) echo codex; return ;; esac
+    count=$((count + 1))
+  done
+  echo manual
+}
+adjust=$(cat "$LOCK/argvnote" 2>/dev/null)
+pre=$(sort -u "$LOCK/wlog" 2>/dev/null | tr '\n' ' ')
+[ -n "$pre" ] && adjust="${adjust:+$adjust; }$pre"
+peak=$(cat "$LOCK/peak" 2>/dev/null)
+"$PYTHON" "$ROOT/lib/agent_throttle/logs.py" "$LOG" "$(date '+%F %T')" "$wait_s" "$dur" "$rc" \
+  "$(sanitize "$PWD")" "$(sanitize "$*")" "$note" "$SLOT/$S" "$W" "$(sanitize "$adjust" | cut -c1-200)" \
+  "$(origin)" "${peak:-0}" "$(sanitize "$WAIT_REASON")" || echo "[solo] log append failed" >&2
 echo "[solo] rc=$rc in ${dur}s (wait ${wait_s}s)"
-# the log is written while the slot is still held (the EXIT trap releases it afterwards): two writes never interleave
-mkdir -p "$(dirname "$LOG")" 2>/dev/null
-[ -s "$LOG" ] || printf 'date\twait_s\tduration_s\trc\tcwd\tcommand\tnote\n' >> "$LOG"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%F %T')" "$wait_s" "$dur" "$rc" "$(sanitize "$PWD")" "$(sanitize "$*")" "$note" >> "$LOG"
 exit $rc

@@ -4,11 +4,10 @@
 # Every key is optional: what you leave out keeps the default shown here. `throttle-config show` prints the effective
 # values. A broken file or a wrong value prints a warning and falls back to the default; nothing stops working.
 #
-# The defaults were measured on a 16 GB, 10-core laptop with no fan, running up to 5 coding agents plus one heavy
-# validation at a time. Different hardware deserves its own numbers: see "How to calibrate" at the end.
+# Slots and inside Jest/Playwright limits are derived from live cores and RAM. Policy thresholds are configurable.
 
 [semaphore]
-# `solo <command>` runs one heavy validation at a time on the machine. The guard treats a command prefixed with
+# `solo <command>` runs heavy validation in a bounded machine-wide slot on the machine. The guard treats a command prefixed with
 # `solo` (or with one of these aliases) as "inside the semaphore". Useful if you keep an older name as a symlink.
 aliases = []
 # Lock directory (created atomically with mkdir). Keep it on a fixed path: agent sandboxes may change $TMPDIR, and
@@ -23,7 +22,7 @@ poll_s = 15
 stale_lock_s = 60
 # Auto slots = max(1, min(C / max(1, floor(C/2)), floor(RAM_GB/10))).
 # C uses performance cores on macOS, then logical CPUs; Linux uses nproc.
-# SOLO_SLOTS and SOLO_CORES override these keys. Failed hardware reads use one slot/worker.
+# SOLO_SLOTS and SOLO_CORES override these keys. Unknown hardware uses one slot; unknown cores use one worker.
 slots = "auto"
 cores = "auto"
 # Playwright cap applied in addition to W. SOLO_PW_MAX overrides.
@@ -80,8 +79,7 @@ psi_red_pct = 10
 helper_processes = ["app-server", "exec-server", "mcp-server", "--chrome-native-host"]
 # Coding agents at once. "auto" = floor((total RAM in GB - 6) / 2), clamped to 1..12:
 #   8 GB -> 1, 16 GB -> 5, 24 GB -> 9, 32 GB or more -> 12.
-# 6 GB are reserved for the OS and apps (~2 GB) plus one heavy validation inside solo (~4 GB peak); each agent gets
-# 2 GB (the session itself, 0.3 to 0.8 GB, plus the language servers and single-file test runs it starts).
+# This is a memory budget, not a quota ceiling. Use an explicit integer for a lower per-user quota.
 max_agents = "auto"
 # Process names counted as agent sessions (basename of the executable).
 agent_processes = ["claude", "codex"]
@@ -114,19 +112,14 @@ high_sessions = 4
 #
 # 1. Idle baseline. Close the agents and run `throttle-load`. Note the free memory percentage and the swap.
 #
-# 2. Your heaviest suite, alone. With nothing else heavy running, measure it through the semaphore at 2 and at 4
-#    workers, twice each, alternating (A B A B), and watch the peak in another terminal with `throttle-load`:
+# 2. Measure a representative suite alone and in occupied slots through solo, with literal worker counts.
+#    Compare durations, peak_mb and wait_reason in semaphore.log, keeping the workload identical.
 #      solo npx jest --ci --maxWorkers=2
 #      solo npx jest --ci --maxWorkers=4
-#    solo prints `rc=N in Ns`; the log (semaphore.log) keeps every duration. Laptops without a fan slow down after a
-#    long battery of runs (thermal throttling: the same suite went from 22 s to 34 s after ~40 min), so only compare
-#    runs from the same session.
 #
-# 3. Inside ceiling (first number of [limits]). Keep 4 if it is clearly faster than 2 and the peak still leaves
-#    min_free_pct free with your agents running; otherwise use 2. Going above 4 rarely helps: the suites we measured
-#    stopped getting faster there while memory kept growing.
+# 3. Leave inside ceilings derived unless measurements justify an explicit [limits] override. solo never raises flags.
 #
-# 4. Outside ceiling (second number). Half of the inside one: several agents may iterate at the same time.
+# 4. Keep outside ceilings small: several agents may iterate at the same time.
 #
 # 5. max_agents. Replace the constants of the formula with yours:
 #      max_agents = floor((RAM - idle_usage - suite_peak) / per_agent)

@@ -104,6 +104,13 @@ with tempfile.TemporaryDirectory(prefix='load-cases-') as t:
     ok('swap uses first sample in 30-minute window', load.window_delta(log, 613, 30, now) == 513)
     ok('future samples do not supply baseline', load.window_delta(log, 613, 30, now - dt.timedelta(hours=2)) is None)
     cfg['logs']['dir'] = t
-    load.write_sample(safe, cfg, now)
-    ok('load log appends seven columns preserving total sessions', len(log.read_text().splitlines()[-1].split('\t')) == 7)
+    cfg['semaphore']['lock_dir'] = str(Path(t, 'lock'))
+    for name, w in [('lock', 8), ('lock.2', 7)]:
+        Path(t, name).mkdir()
+        Path(t, name, 'w').write_text(str(w))
+    cfg['semaphore']['slots'] = 2
+    load.write_sample(dict(safe, processes=processes[-1:]), cfg, now)
+    ok('load log appends ten columns preserving total sessions', len(log.read_text().splitlines()[-1].split('\t')) == 10)
+    fields = log.read_text().splitlines()[-1].split('\t')
+    ok('load columns reflect total, codex, busy slots and workers', fields[4] == '1' and fields[7:] == ['1', '2/2', '15'])
 print(f'{n}/{n} cases')

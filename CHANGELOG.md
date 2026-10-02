@@ -3,6 +3,21 @@
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Hardware-derived semaphore slots with core/slot overrides, per-slot worker budgets and a memory gate for extra slots.
+- Worker flag lowering and direct Jest/Playwright injection; a Node preload covers package-manager scripts.
+- Portable live load signals, swap-growth and thermal checks, configurable helper exclusions and conservative Linux fallbacks.
+- Semaphore slot/worker/origin/peak/wait columns and load Codex/slot/worker columns, with old and mixed log compatibility.
+
+### Changed
+
+- Owner locks use PID + process start time while preserving old locks without start-time files.
+- Jest/Playwright inside ceilings derive from cores unless explicitly configured; the public agent ceiling remains auto.
+- Total swap above RAM/8 warns; explicitly configured legacy absolute limits still block.
+
 ## [0.1.0] - 2026-09-28
 
 First public version.

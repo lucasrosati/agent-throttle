@@ -9,7 +9,7 @@
                          |
                      allowed
                          |
-        heavy? --> solo <command>  ---- one at a time on the machine ---> semaphore.log
+        heavy? --> solo <command>  ---- hardware-derived slots ---> semaphore.log
                          |
       launchd (macOS) -- throttle-load --log every 5 min ----------------> load.log
                      -- throttle-report every Monday ----------------> week-YYYY-WW.md
@@ -18,18 +18,26 @@
 
 ## solo: the semaphore
 
-`solo <command>` runs the command only when no other `solo` is running anywhere on the machine, and returns the
+`solo <command>` runs the command when one of its machine-wide slots is available, and returns the
 command's exit code.
 
 - **The lock is a directory** (`[semaphore] lock_dir`, default `/tmp/agent-throttle.lock`) created with `mkdir`, which
   is atomic. The path is fixed on purpose: agent sandboxes may set their own `$TMPDIR`, and every process must see the
   same lock.
-- **Inside the lock:** `pid` (the owner), `cmd` (folder and command, shown to whoever waits), `child` and `child_start`
+- **Slots and workers.** S = max(1, min(floor(C/max(1, floor(C/2))), floor(RAM_GB/10))). Slot 1 uses `lock_dir`; others
+  use `<lock_dir>.k`. C uses performance cores on macOS with logical CPUs as fallback, or `nproc` on Linux. The live
+  values can be overridden with `semaphore.cores` / `slots` or `SOLO_CORES` / `SOLO_SLOTS`. At acquisition,
+  W = min(ceil(C/2), floor(C/occupied_slots)), at least 1, is fixed for the run and written to `w`.
+- **Memory gate.** Slot 1 is always admitted. Additional slots require `gate_pct` (25%) free and free MB >= the peak p90
+  from the last 50 log rows with at least five numeric peaks. P90 uses nearest rank, ceil(0.9*n). Without enough data,
+  require RAM/4; `gate_mb` / `SOLO_GATE_MB` forces a threshold. Invalid reads close the additional slots. Waiting records
+  a gate reason or `slots busy`.
+- **Inside each lock:** `pid` and `pid_start` (owner PID and start time), `w`, `cmd` (folder and command, shown to whoever waits), `child` and `child_start`
   (the command's PID and its start time).
 - **Waiting.** While the lock exists, `solo` prints who holds it and polls every `poll_s` seconds.
-- **Dead owners.** If the owner PID no longer exists (killed with `kill -9`, terminal closed), the next `solo` kills the
+- **Dead owners.** If the owner PID no longer exists or its `ps -o lstart` differs from `pid_start` (killed with `kill -9`, terminal closed), the next `solo` kills the
   orphan command's process tree and takes the slot. The start time is compared before killing, so a reused PID is
-  never touched. A lock with no `pid` file for longer than `stale_lock_s` (the owner died between `mkdir` and writing
+  never touched. Locks without `pid_start` use `kill -0` for compatibility; inconclusive start-time reads do not authorize reaping. A lock with no `pid` file for longer than `stale_lock_s` (the owner died between `mkdir` and writing
   the pid) is removed too.
 - **Timeout.** A watchdog kills the whole process tree after `timeout_s` (default 20 min, `SOLO_TIMEOUT` overrides),
   counted from the start of the command: waiting for the slot does not count. The exit code is then 124 and the log
@@ -37,11 +45,17 @@ command's exit code.
   owns the lock, so it never touches another run.
 - **Signals.** Ctrl+C or TERM on `solo` kills the command's tree and releases the lock.
 - **Environment.** `[semaphore.env]` is exported to the command; by default `PLAYWRIGHT_HTML_OPEN=never`.
-- **Log.** One TSV line per run in `semaphore.log`, written while the slot is still held, so two runs never interleave.
+- **Log.** One TSV line per run in `semaphore.log`, appended under a file lock so concurrent slots share one header and complete rows. RSS of the child tree is sampled every 2 seconds.
   Values of `VAR=...`, of `--*token*`/`--*secret*`/`--*pass*`/`--*key*` options and credentials in URLs are replaced by
   `***`.
 - **No Python dependency for the lock.** Settings come from `throttle-config shell`; if that fails, `solo` prints a
-  warning and uses its built-in defaults.
+  warning and uses its built-in defaults. Unknown hardware reduces the fallback to one slot; an unknown core count uses one worker; failed worker rewriting refuses to start the command.
+
+`solo` only lowers explicit worker counts (numeric or percentages), replaces unknown values with W and injects a flag
+for direct Jest/Playwright commands without one. Playwright gets min(W, `playwright_max_workers`, default 4).
+Children receive `SOLO_W`, `SOLO_W_PW`, `SOLO_CORES`, `SOLO_SLOT`, `SOLO_SLOT_DIR`. A Node `--require` preload handles
+Jest/Playwright inside npm/pnpm/yarn scripts; replacing `NODE_OPTIONS` (for example with cross-env) drops it. Other Node
+processes are unaffected. The guard still requires literal flags, so its check may block a command before solo rewrites it.
 
 Portability: macOS and Linux (bash 3.2+, `pgrep`, `ps -o lstart`, GNU or BSD `stat`).
 
@@ -72,7 +86,7 @@ back to the agent, which usually fixes the command right away.
    folder: the script body goes through the same rules, with the extra arguments appended the way npm does (npm only
    after `--`, pnpm with or without it) and npm's `pre`/`post` scripts. A test script that cannot be resolved
    (`--filter`, `-r`, unknown folder) only runs inside `solo`.
-5. **Rules per runner** (ceilings from `[limits]`, inside/outside `solo`):
+5. **Rules per runner** (inside/outside `solo`; Jest inside = ceil(C/2), Playwright inside = min(ceil(C/2), 4), explicit `[limits]` overrides):
 
 | Runner | Workers | Full suite outside `solo` | Always blocked |
 |---|---|---|---|
@@ -111,14 +125,22 @@ back to the agent, which usually fixes the command right away.
 
 ## throttle-load: the launch gate
 
-`throttle-load` prints free memory, swap, agent processes, the largest apps, test processes by worktree and who holds
-`solo`, and ends with a verdict: "ok to launch" or "DO NOT launch" (free memory below `min_free_pct` or swap above
-`max_swap_mb`). Agents read the verdict before starting another agent or a subagent that writes code.
+`throttle-load` reads cores, RAM, free memory, pressure, swap, thermal status and processes live. It refuses to launch
+when agents reach `max_agents`, free memory is below `min_free_pct` (25), pressure is red, yellow pressure accompanies
+rising swap, swap rises by more than `swap_delta_mb` (512) over `swap_window_min` (30), any thermal warning is present,
+or a required read fails. The first valid non-future sample in that time window is the baseline; without one, the
+verdict blocks and recommends `throttle-load --log`. Total swap above RAM/8 is a warning only. Explicit legacy
+`max_swap_mb` values preserve the previous absolute launch limit; the report still uses that key as its historical threshold.
 
-`throttle-load --log` appends one sample to `load.log`; launchd runs it every 5 minutes. On macOS it reads
-`kern.memorystatus_level` (the free percentage that `memory_pressure` prints), `kern.memorystatus_vm_pressure_level`
-and `vm.swapusage`, and counts processes with one `ps`. It takes well under a second. Linux is not supported yet in
-v0.1.0.
+`max_agents = "auto"` remains the RAM budget; a positive integer sets a separate quota ceiling. Configured process names
+are counted by executable basename, excluding helpers (`app-server`, `exec-server`, `mcp-server`) and nested duplicates.
+The verdict counts all configured agents; the appended Codex column is a subset, not another total.
+
+macOS uses sysctl, ps and `pmset -g therm`. Linux uses `nproc`, `/proc/meminfo` (MemAvailable and swap), PSI and sysfs
+thermal zones. PSI maps `some.avg10` >= `psi_yellow_pct` (1) to yellow and `full.avg10` >= `psi_red_pct` (10) to red.
+Thermal zones require readable hot/critical trips; missing PSI or usable thermal signals means do not launch. These
+conservative Linux signals are not equivalent to macOS pressure levels. All branches are tested with synthetic readers.
+`throttle-load --log` appends a sample; launchd schedules it every five minutes on macOS. Linux timers are not included.
 
 ## throttle-clean
 

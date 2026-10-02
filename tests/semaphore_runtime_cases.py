@@ -63,17 +63,24 @@ with tempfile.TemporaryDirectory(prefix='slot-cases-') as t:
         r = run('sh', '-c', 'echo W=$SOLO_W slot=$SOLO_SLOT')
         ok('two slots on 15 cores and 24 GB; W is 7 in pair', r.returncode == 0 and 'W=7 slot=2' in r.stdout)
         p.communicate(timeout=8)
+        rows = (tmp / 'logs/semaphore.log').read_text().splitlines()[1:]
+        ok('new rows carry slot, w and positive sampled peak_mb', all(len(row.split('\t')) == 13 for row in rows)
+           and any(int(row.split('\t')[11]) > 0 for row in rows))
         (tmp / 'free').write_text('1')
         p = hold()
         r = run('sh', '-c', 'echo slot=$SOLO_SLOT')
         ok('slot 2 waits when memory gate closed', r.returncode == 0 and 'memory: free 1%' in r.stdout and 'slot=1' in r.stdout)
         p.communicate(timeout=8)
+        rows = (tmp / 'logs/semaphore.log').read_text().splitlines()
+        ok('slot 2 waits when memory gate closed and logs the reason',
+           any('memory: free 1%' in row.split('\t')[-1] for row in rows[1:]))
         (tmp / 'free').unlink()
         p = hold()
         r = run('sh', '-c', 'echo slot=$SOLO_SLOT')
         ok('failed memory read closes the gate; slot 1 still admitted', r.returncode == 0 and 'read failed' in r.stdout
            and 'slot=1' in r.stdout)
         p.communicate(timeout=8)
+        (tmp / 'logs/semaphore.log').unlink()
         (tmp / 'free').write_text('25')
         p = hold()
         r = run('sh', '-c', 'echo slot=$SOLO_SLOT')
@@ -85,6 +92,13 @@ with tempfile.TemporaryDirectory(prefix='slot-cases-') as t:
         r = run('sh', '-c', 'echo slot=$SOLO_SLOT')
         ok('one slot on 10 cores and 16 GB waits', r.returncode == 0 and 'slots busy' in r.stdout and 'slot=1' in r.stdout)
         p.communicate(timeout=8)
+        fake_jest = tmp / 'bin/jest'
+        fake_jest.write_text('#!/bin/sh\nprintf "%s\\n" "$*"\n')
+        fake_jest.chmod(0o755)
+        r = run(str(fake_jest), '--maxWorkers=12', extra={'SOLO_CORES': '15', 'SOLO_SLOTS': '1'})
+        fields = (tmp / 'logs/semaphore.log').read_text().splitlines()[-1].split('\t')
+        ok('direct argv reduced and adjustment logged', r.returncode == 0 and '--maxWorkers=8' in r.stdout
+           and '--maxWorkers 12->8' in fields[9] and fields[10] in ('manual', 'claude', 'codex'))
         r = run('sh', '-c', 'echo slot=$SOLO_SLOT W=$SOLO_W', extra={'SOLO_CORES': '15', 'SOLO_SLOTS': '1'})
         ok('env overrides cores and slots', r.returncode == 0 and 'slot=1 W=8' in r.stdout)
     finally:

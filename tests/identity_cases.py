@@ -41,7 +41,8 @@ with tempfile.TemporaryDirectory(prefix='identity-') as t:
             time.sleep(0.8)
             ok('lock without start-time file falls back to kill -0', p.poll() is None and lock.exists())
         finally:
-            p.terminate(); p.communicate(timeout=3)
+            p.terminate()
+            p.communicate(timeout=3)
         (lock / 'pid').unlink()
         os.utime(lock, (1, 1))
         r = subprocess.run([str(ROOT / 'bin/solo'), 'true'], env=env, text=True, capture_output=True, timeout=5)
@@ -52,5 +53,6 @@ with tempfile.TemporaryDirectory(prefix='identity-') as t:
                            env=env, text=True, capture_output=True, timeout=5)
         ok('owner start-time matches process', r.returncode == 0)
     finally:
-        sleeper.terminate(); sleeper.wait(timeout=3)
+        sleeper.terminate()
+        sleeper.wait(timeout=3)
 print(f'{n}/{n} cases')

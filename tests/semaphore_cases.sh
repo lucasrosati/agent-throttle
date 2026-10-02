@@ -27,7 +27,7 @@ col() { awk -F'\t' -v l="$1" -v c="$2" 'NR == l + 1 { print $c }' "$LOG"; }   # 
 
 "$SOLO" sh -c 'exit 3' > o1 2>&1; rc=$?
 ok 'the command exit code is returned' '[ $rc = 3 ]'
-ok 'TSV header with 7 columns' '[ "$(head -1 "$LOG")" = "$(printf "date\twait_s\tduration_s\trc\tcwd\tcommand\tnote")" ]'
+ok 'TSV header with 13 columns' '[ "$(head -1 "$LOG")" = "$(printf "date\twait_s\tduration_s\trc\tcwd\tcommand\tnote\tslot\tw\tw_adjust\torigin\tpeak_mb\twait_reason")" ]'
 ok 'normal line: rc=3 and empty note' '[ "$(col 1 4)" = 3 ] && [ -z "$(col 1 7)" ]'
 
 t0=$(date +%s); SOLO_TIMEOUT=2 "$SOLO" sh -c 'sleep 31 & sleep 32' > o2 2>&1; rc=$?; el=$(( $(date +%s) - t0 )); sleep 1

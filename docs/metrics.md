@@ -19,6 +19,15 @@ All in `[logs] dir` (default `~/.local/state/agent-throttle/`), tab-separated wi
 | `cwd` | folder |
 | `command` | the command, with secrets masked |
 | `note` | `timeout`, `ci`, or empty |
+| `slot` | acquired slot/total, such as `2/2` |
+| `w` | worker budget fixed at acquisition |
+| `w_adjust` | flags lowered or injected, including preload changes |
+| `origin` | nearest recognized parent: `claude`, `codex`, or `manual` |
+| `peak_mb` | peak sampled RSS of the child process tree, every 2 seconds; fast commands may record 0 |
+| `wait_reason` | memory gate reason or `slots busy`, empty without waiting |
+
+The first seven columns are unchanged. Readers accept seven-column, extended and mixed logs; existing headers and rows
+are not converted. `solo-ci` continues to write its original seven columns.
 
 ### guard-blocks.log (throttle-guard)
 
@@ -30,12 +39,19 @@ turn it off.
 
 | Column | Meaning |
 |---|---|
-| `free_pct` | free memory percentage (macOS `kern.memorystatus_level`) |
-| `pressure` | `green`, `yellow`, `red` (macOS memory pressure) |
+| `free_pct` | free memory percentage (macOS sysctl or Linux MemAvailable) |
+| `pressure` | `green`, `yellow`, `red`, `unknown` (macOS pressure or Linux PSI) |
 | `swap_mb` | swap in use |
 | `agent_sessions` | processes named like `[load] agent_processes` (idle sessions count too) |
 | `test_procs` | processes matching `[load] test_process_regex` |
-| `semaphore_busy` | `yes` if `solo` held the slot |
+| `semaphore_busy` | `yes` if any slot directory exists |
+| `codex_agents` | Codex subset of `agent_sessions`, with helper processes excluded |
+| `slots` | busy/total slots, such as `2/2` |
+| `workers` | sum of stored W across occupied slots; legacy locks without W contribute 0 |
+
+`date` remains the first column. `agent_sessions` remains the total across all configured agent names; do not add
+`codex_agents` to it. Old seven-column rows remain readable. Missing signals are logged empty/unknown and never imply a
+safe launch verdict. A fresh sample within 30 minutes is required for the swap-growth verdict.
 
 A sleeping machine takes no samples; the report accounts for the gaps.
 
