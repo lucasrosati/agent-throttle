@@ -13,6 +13,7 @@ cat > "$T/config.toml" <<EOF
 [semaphore]
 lock_dir = "$T/lock"
 poll_s = 1
+slots = 1
 [logs]
 dir = "$T/logs"
 EOF

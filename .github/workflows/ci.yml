@@ -26,6 +26,8 @@ jobs:
         run: python3 tests/guard_cases.py
       - name: Config and hook
         run: python3 tests/config_cases.py
+      - name: Hardware readers
+        run: python3 tests/machine_cases.py
       - name: Semaphore (solo)
         run: bash tests/semaphore_cases.sh
       - name: solo-ci refusals

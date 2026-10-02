@@ -21,6 +21,11 @@ timeout_s = 1200
 poll_s = 15
 # A lock directory without an owner PID for this long is treated as abandoned.
 stale_lock_s = 60
+# Auto slots = max(1, min(C / max(1, floor(C/2)), floor(RAM_GB/10))).
+# C uses performance cores on macOS, then logical CPUs; Linux uses nproc.
+# SOLO_SLOTS and SOLO_CORES override these keys. Failed hardware reads use one slot/worker.
+slots = "auto"
+cores = "auto"
 
 [semaphore.env]
 # Exported to the command that solo runs. Playwright's html reporter opens a server and waits for Ctrl+C after a

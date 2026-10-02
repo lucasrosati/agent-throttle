@@ -38,6 +38,7 @@ check() { # check <name> <file relative to the copy> <old> <new> <battery comman
 
 G='GUARD_PATH=$COPY/lib/agent_throttle/guard.py "$PYTHON_BIN" "$REPO/tests/guard_cases.py"'
 S='SOLO_PATH=$COPY/bin/solo bash "$REPO/tests/semaphore_cases.sh"'
+M='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/machine_cases.py"'
 GUARD=lib/agent_throttle/guard.py
 
 # control: an unmodified copy must pass both batteries, or a "killed" below would prove nothing
@@ -70,6 +71,13 @@ check log-not-sanitized bin/solo \
   '"$(sanitize "$*")"' '"$*"' "$S"
 check wait-counted-as-run bin/solo \
   'start=$(date +%s)' 'start=$t0' "$S"
+
+check slots-fixed lib/agent_throttle/machine.py \
+  'return max(1, min(c // max(1, c // 2), int(ram // 2**30 // 10)))' 'return 1' "$M"
+check performance-cores-ignored lib/agent_throttle/machine.py \
+  "positive(command('sysctl', '-n', 'hw.perflevel0.logicalcpu'))" 'None' "$M"
+check linux-memory-unavailable lib/agent_throttle/machine.py \
+  "available = info['MemTotal'], info['MemAvailable']" "available = info['MemTotal'], 0" "$M"
 
 echo "$killed killed, $survived survived, $broken broken"
 [ $survived = 0 ] && [ $broken = 0 ]

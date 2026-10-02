@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# solo <command...>: one heavy validation at a time on the machine (a semaphore shared by every agent and terminal).
+# solo <command...>: a bounded number of heavy validations at a time on the machine (a semaphore shared by every agent and terminal).
 #
 # The lock is a directory created with mkdir (atomic). The command runs as a background child: its PID goes to
 # $LOCK/child together with its start time (against PID reuse). If the lock owner dies (kill -9), the next solo kills
@@ -10,6 +10,7 @@
 # Settings come from `throttle-config shell`; if it fails, the built-in defaults below apply (the lock never depends
 # on Python).
 
+PYTHON=${AT_PYTHON:-python3}   # pinned by install.sh
 src=${BASH_SOURCE[0]}
 while [ -L "$src" ]; do
   dir=$(cd -P "$(dirname "$src")" && pwd); src=$(readlink "$src")
@@ -18,7 +19,7 @@ done
 here=$(cd -P "$(dirname "$src")" && pwd)
 
 if [ $# -eq 0 ] || [ "$1" = -h ] || [ "$1" = --help ]; then
-  echo "usage: solo <command...>   (runs the command when no other solo is running; exit code = the command's)"
+  echo "usage: solo <command...>   (runs the command when a solo slot is available; exit code = the command's)"
   [ $# -eq 0 ] && exit 64 || exit 0
 fi
 
@@ -28,7 +29,13 @@ else
   echo "[solo] throttle-config failed; using built-in defaults" >&2
   export PLAYWRIGHT_HTML_OPEN=never
 fi
-LOCK=${AT_SEMAPHORE_LOCK_DIR:-/tmp/agent-throttle.lock}
+ROOT=$(cd "$here/.." && pwd)
+read -r C S <<EOF
+$("$PYTHON" "$ROOT/lib/agent_throttle/machine.py" "${SOLO_CORES:-${AT_SEMAPHORE_CORES:-auto}}" "${SOLO_SLOTS:-${AT_SEMAPHORE_SLOTS:-auto}}" 2>/dev/null)
+EOF
+case "$C" in ''|*[!0-9]*|0) C=1 ;; esac
+case "$S" in ''|*[!0-9]*|0) S=1 ;; esac
+BASE_LOCK=${AT_SEMAPHORE_LOCK_DIR:-/tmp/agent-throttle.lock}
 LOG=${AT_LOG_SEMAPHORE:-$HOME/.local/state/agent-throttle/semaphore.log}
 POLL=${AT_SEMAPHORE_POLL_S:-15}
 STALE=${AT_SEMAPHORE_STALE_LOCK_S:-60}
@@ -83,16 +90,24 @@ sanitize() {
 }
 
 t0=$(date +%s)
-until mkdir "$LOCK" 2>/dev/null; do
-  owner=$(cat "$LOCK/pid" 2>/dev/null)
-  if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
-    echo "[solo] orphan lock of PID $owner"; reap_orphan_child; rm -rf "$LOCK"; continue
-  fi
-  # a lock without a pid for longer than STALE seconds = its owner died between mkdir and writing the pid
-  if [ -z "$owner" ] && [ $(( $(date +%s) - $(mtime "$LOCK" || date +%s) )) -gt "$STALE" ]; then
-    echo "[solo] lock without owner removed"; reap_orphan_child; rm -rf "$LOCK"; continue
-  fi
-  echo "[solo] slot taken by PID ${owner:-?} ($(cat "$LOCK/cmd" 2>/dev/null)); waiting..."
+slotdir() { if [ "$1" = 1 ]; then printf '%s\n' "$BASE_LOCK"; else printf '%s.%s\n' "$BASE_LOCK" "$1"; fi; }
+SLOT=""
+while [ -z "$SLOT" ]; do
+  for k in $(seq 1 "$S"); do
+    LOCK=$(slotdir "$k")
+    if mkdir "$LOCK" 2>/dev/null; then SLOT=$k; break; fi
+    owner=$(cat "$LOCK/pid" 2>/dev/null)
+    if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+      echo "[solo] orphan lock of PID $owner"; reap_orphan_child; rm -rf "$LOCK"
+      if mkdir "$LOCK" 2>/dev/null; then SLOT=$k; break; fi
+    fi
+    if [ -z "$owner" ] && [ $(( $(date +%s) - $(mtime "$LOCK" || date +%s) )) -gt "$STALE" ]; then
+      echo "[solo] lock without owner removed"; reap_orphan_child; rm -rf "$LOCK"
+      if mkdir "$LOCK" 2>/dev/null; then SLOT=$k; break; fi
+    fi
+  done
+  [ -n "$SLOT" ] && break
+  echo "[solo] $S slots busy; waiting..."
   sleep "$POLL"
 done
 echo $$ > "$LOCK/pid"; echo "$PWD :: $*" > "$LOCK/cmd"

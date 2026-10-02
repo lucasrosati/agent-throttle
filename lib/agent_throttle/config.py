@@ -20,6 +20,8 @@ DEFAULTS = {
         'timeout_s': 1200,
         'poll_s': 15,
         'stale_lock_s': 60,
+        'slots': 'auto',
+        'cores': 'auto',
         'env': {'PLAYWRIGHT_HTML_OPEN': 'never'},
         'ci': {'timeout_s': 3600, 'interval_s': 30, 'min_checks': 0},
     },
@@ -102,7 +104,7 @@ def _same_type(default, value):
 
 
 def _valid(path, default, value):
-    if path == 'load.max_agents':
+    if path in ('load.max_agents', 'semaphore.slots', 'semaphore.cores'):
         return value == 'auto' or (isinstance(value, int) and not isinstance(value, bool) and value > 0)
     if path.startswith('limits.'):
         return (isinstance(value, list) and len(value) == 2 and
