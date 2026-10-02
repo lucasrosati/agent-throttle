@@ -2,8 +2,8 @@
 
 Thanks for helping. Issues and pull requests are welcome, especially:
 
-- **Linux support for `throttle-load`** (free memory and pressure from `/proc/meminfo` and PSI in
-  `/proc/pressure/memory`, swap from `/proc/swaps`) and **systemd user timers** for the three scheduled jobs.
+- **Linux signal coverage** for `throttle-load` (PSI and usable thermal trips vary by system) and
+  **systemd user timers** for the three scheduled jobs.
 - **Guard gaps** listed in [docs/how-it-works.md](docs/how-it-works.md#known-gaps): Jest `projects` and `testRegex`,
   `node --test`, `python -m unittest`, `make` targets.
 - **A hook for Codex**, if its hook system can block shell commands the way Claude Code's `PreToolUse` does.
@@ -11,11 +11,18 @@ Thanks for helping. Issues and pull requests are welcome, especially:
 
 ## Running the tests
 
-No dependencies besides bash, git and Python 3.11+. `bash tests/run_all.sh` runs everything below, as CI does.
+The commands require bash, git and Python 3.11+. Node is optional at runtime; CI also uses Node/npm to test the preload. `bash tests/run_all.sh` runs everything below, as CI does.
 
 ```bash
 python3 tests/guard_cases.py        # the guard's rules (255 cases)
 python3 tests/config_cases.py       # config loading and the hook end to end
+python3 tests/machine_cases.py      # live hardware readers, simulated on both platforms
+python3 tests/worker_cases.py       # worker lowering and Node preload
+python3 tests/gate_cases.py         # memory gate and history boundaries
+python3 tests/semaphore_runtime_cases.py  # real slots, fake hardware
+python3 tests/identity_cases.py     # reused PID and legacy locks
+python3 tests/load_cases.py         # portable launch verdict and logs
+python3 tests/log_cases.py          # old, extended and mixed rows
 bash tests/semaphore_cases.sh       # solo (~25 s: real timeouts)
 bash tests/solo_ci_cases.sh         # solo-ci refusals (no GitHub needed)
 python3 tests/tools_cases.py        # report, logrotate, load, clean

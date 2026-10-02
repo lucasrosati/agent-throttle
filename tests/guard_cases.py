@@ -16,7 +16,9 @@ import tempfile
 HERE = os.path.dirname(os.path.realpath(__file__))
 ROOT_DIR = os.path.dirname(HERE)
 TMP = tempfile.mkdtemp(prefix='guard-cases-')
-os.environ['AGENT_THROTTLE_CONFIG'] = os.path.join(TMP, 'no-config.toml')
+os.environ['AGENT_THROTTLE_CONFIG'] = os.path.join(TMP, 'legacy-limits.toml')
+with open(os.environ['AGENT_THROTTLE_CONFIG'], 'w') as fh:
+    fh.write('[limits]\njest = [4, 2]\nplaywright = [2, 1]\n')
 os.environ['XDG_STATE_HOME'] = os.path.join(TMP, 'state')
 sys.path.insert(0, os.path.join(ROOT_DIR, 'lib'))
 spec = importlib.util.spec_from_file_location(

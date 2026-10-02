@@ -9,13 +9,14 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.realpath(__file__))
-ROOT_DIR = os.path.dirname(HERE)
+ROOT_DIR = os.environ.get('THROTTLE_ROOT', os.path.dirname(HERE))
 LIB = os.path.join(ROOT_DIR, 'lib')
 sys.path.insert(0, LIB)
 TMP = tempfile.mkdtemp(prefix='config-cases-')
 os.environ['XDG_STATE_HOME'] = os.path.join(TMP, 'state')
 os.environ['AGENT_THROTTLE_CONFIG'] = os.path.join(TMP, 'none.toml')
 
+os.environ['SOLO_CORES'] = '7'
 from agent_throttle import config  # noqa: E402
 
 fails = n = 0
@@ -60,6 +61,22 @@ ok('max_agents formula: 8->1, 16->5, 24->9, 32->12, 64->12',
    [config.max_agents_for(g) for g in (8, 16, 24, 32, 64)] == [1, 5, 9, 12, 12])
 ok('max_agents formula: tiny or unknown RAM', config.max_agents_for(4) == 1 and config.max_agents_for(None) == 3)
 ok('auto max_agents resolved to a number', isinstance(cfg['load']['max_agents'], int))
+
+# ---- runtime defaults and explicit overrides
+os.environ['SOLO_CORES'] = '15'
+dynamic = config.load()
+ok('derived Jest and Playwright ceilings', dynamic['limits']['jest'] == [8, 2] and dynamic['limits']['playwright'] == [4, 1])
+ok('new slot and worker keys default to documented values', dynamic['semaphore']['slots'] == 'auto'
+   and dynamic['semaphore']['cores'] == 'auto' and dynamic['semaphore']['playwright_max_workers'] == 4)
+g = fresh_guard()
+ok('derived guard limit passes and blocks at boundary', rule(g, 'solo jest --maxWorkers=8') == 'ok'
+   and rule(g, 'solo jest --maxWorkers=9') == 'jest-over-limit'
+   and rule(g, 'solo playwright test --workers=4') == 'ok'
+   and rule(g, 'solo playwright test --workers=5') == 'playwright-over-limit')
+ok('load thresholds default to documented values', dynamic['load']['swap_window_min'] == 30
+   and dynamic['load']['swap_delta_mb'] == 512 and dynamic['load']['swap_warn_ram_divisor'] == 8
+   and dynamic['load']['min_free_pct'] == 25 and dynamic['_max_swap_explicit'] is False)
+os.environ['SOLO_CORES'] = '7'
 
 # ---- the guard reads limits, aliases and heavy scripts from the file
 write_cfg('[limits]\njest = [6, 3]\nplaywright = [1, 1]\n[semaphore]\naliases = ["valida"]\n'

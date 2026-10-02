@@ -32,7 +32,7 @@ PUBLIC = [
     ('google-api-key', re.compile(r'\bAIza[0-9A-Za-z_-]{35}\b')),
     ('private-key', re.compile(r'-----BEGIN [A-Z ]*PRIVATE KEY-----')),
 ]
-EMAIL_OK = re.compile(r'@(example\.(com|org|net)|users\.noreply\.github\.com)$', re.I)
+EMAIL_OK = re.compile(r'(?:@(example\.(com|org|net)|users\.noreply\.github\.com)$|^noreply@github\.com$)', re.I)
 
 
 def load_terms(path):

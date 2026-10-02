@@ -13,6 +13,8 @@ from pathlib import Path
 
 import tomllib
 
+from . import machine
+
 DEFAULTS = {
     'semaphore': {
         'aliases': [],                        # extra command names the guard treats as "inside the semaphore"
@@ -20,10 +22,15 @@ DEFAULTS = {
         'timeout_s': 1200,
         'poll_s': 15,
         'stale_lock_s': 60,
+        'slots': 'auto',
+        'cores': 'auto',
+        'playwright_max_workers': 4,
+        'gate_pct': 25,
+        'gate_mb': 'auto',
         'env': {'PLAYWRIGHT_HTML_OPEN': 'never'},
         'ci': {'timeout_s': 3600, 'interval_s': 30, 'min_checks': 0},
     },
-    'limits': {  # [inside the semaphore, outside]; measured on a 16 GB, 10-core laptop
+    'limits': {  # [inside the semaphore, outside]; Jest/Playwright defaults are resolved at load time
         'jest': [4, 2],
         'vitest': [4, 2],
         'pytest': [4, 2],
@@ -35,7 +42,13 @@ DEFAULTS = {
     },
     'load': {
         'min_free_pct': 25,
-        'max_swap_mb': 3072,
+        'max_swap_mb': 3072,                  # legacy report threshold; explicit values also block launch
+        'swap_window_min': 30,
+        'swap_delta_mb': 512,
+        'swap_warn_ram_divisor': 8,
+        'psi_yellow_pct': 1,
+        'psi_red_pct': 10,
+        'helper_processes': ['app-server', 'exec-server', 'mcp-server', '--chrome-native-host'],
         'max_agents': 'auto',                 # 'auto' = derived from total RAM, see max_agents_for()
         'agent_processes': ['claude', 'codex'],
         'test_process_regex': 'jest|vitest|pytest|playwright|(^|[/ ])tsc( |$)',
@@ -83,10 +96,8 @@ def total_ram_gb():
 def max_agents_for(ram_gb):
     """Agents coding at once for a machine with `ram_gb` of RAM: floor((RAM - 6) / 2), between 1 and 12.
 
-    6 GB are reserved for the OS and desktop apps (~2 GB) plus ONE heavy validation inside the semaphore (full test
-    suites peaked at 3.5 to 6 GB in our measurements). Each coding agent gets 2 GB: the agent session itself (0.3 to
-    0.8 GB) plus what it starts (language servers, dev servers, single-file test runs with 2 workers). A 16 GB machine
-    gets 5, which is what held up in daily use. Calibrate with your own numbers: see config.example.toml.
+    This is a public memory budget, not a plan quota. Reserve 6 GB for the OS, apps and validation, then budget
+    2 GB per agent. Set an explicit integer when a separate quota ceiling is lower.
     """
     if not ram_gb:
         return 3
@@ -102,8 +113,12 @@ def _same_type(default, value):
 
 
 def _valid(path, default, value):
-    if path == 'load.max_agents':
+    if path in ('load.max_agents', 'semaphore.slots', 'semaphore.cores', 'semaphore.gate_mb'):
         return value == 'auto' or (isinstance(value, int) and not isinstance(value, bool) and value > 0)
+    if path in ('semaphore.gate_pct', 'load.min_free_pct', 'load.psi_yellow_pct', 'load.psi_red_pct'):
+        return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100
+    if path in ('semaphore.playwright_max_workers', 'load.swap_window_min', 'load.swap_warn_ram_divisor'):
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
     if path.startswith('limits.'):
         return (isinstance(value, list) and len(value) == 2 and
                 all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in value))
@@ -144,14 +159,29 @@ def load(path=None):
     path = Path(path) if path else config_path()
     cfg['_file'] = str(path)
     cfg['_loaded'] = False
+    data = {}
     if path.is_file():
         try:
             with open(path, 'rb') as fh:
                 data = tomllib.load(fh)
-            _merge(cfg, data)
             cfg['_loaded'] = True
         except (OSError, tomllib.TOMLDecodeError) as exc:
             warn(f'could not read {path}: {exc} (using defaults)')
+    sem = data.get('semaphore', {})
+    sem = sem if isinstance(sem, dict) else {}
+    core_override = sem.get('cores', 'auto')
+    if not _valid('semaphore.cores', 'auto', core_override):
+        core_override = 'auto'
+    c, _ = machine.settings(os.environ.get('SOLO_CORES', core_override))
+    pw = sem.get('playwright_max_workers', 4)
+    if not _valid('semaphore.playwright_max_workers', 4, pw):
+        pw = 4
+    cfg['limits']['jest'] = [(c + 1) // 2, 2]
+    cfg['limits']['playwright'] = [min((c + 1) // 2, pw), 1]
+    _merge(cfg, data)
+    raw_load = data.get('load', {})
+    cfg['_max_swap_explicit'] = isinstance(raw_load, dict) and 'max_swap_mb' in raw_load and _valid(
+        'load.max_swap_mb', 3072, raw_load['max_swap_mb'])
     state = os.environ.get('XDG_STATE_HOME') or os.path.expanduser('~/.local/state')
     logs_dir = cfg['logs']['dir'] or os.path.join(state, 'agent-throttle')
     cfg['logs']['dir'] = os.path.expanduser(logs_dir)

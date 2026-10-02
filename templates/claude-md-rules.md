@@ -6,18 +6,19 @@ config, update the numbers below (`throttle-config get limits`, `throttle-config
 -->
 ## Machine resources (agent-throttle)
 
-Several coding agents share this machine. Heavy validation runs one at a time and test parallelism is capped.
+Several coding agents share this machine. Heavy validation runs in hardware-derived slots and test parallelism is capped.
 
 - **Before launching an agent or a subagent that writes code**, run `throttle-load` and launch only on "ok to launch"
-  (free memory below 25% or swap above 3 GB means do not launch). Up to 5 agents coding at once on this machine.
-- **Heavy validation only through `solo <command>`** (one at a time on the machine; if the slot is taken it waits):
+  (it checks free memory, pressure, swap growth, thermal status and read failures). Use the effective
+  `load.max_agents` ceiling (`throttle-config get load.max_agents`), with a lower integer for your quota if needed.
+- **Heavy validation only through `solo <command>`** (hardware-derived slots shared by the machine; when busy it waits):
   a full test suite, including a folder that IS the suite (the pytest `testpaths`, the prefix of the Vitest `include`,
   the Jest `rootDir`/`roots`/`testMatch` prefix, the Playwright `testDir`, or the repository root); a project-wide
   type-check (`tsc --noEmit`, mypy, pyright); a whole-repository lint; scripts like `validate:local` and `typecheck`.
   Example: `solo pnpm run typecheck 2>&1 | tail -n 80`. The real exit code is the last line, `[solo] rc=N`. Each run
   has a 20-minute timeout: rc=124 means it was hit and the command's process tree was killed.
-- **Literal worker counts**, with a ceiling inside/outside `solo`: Jest and Vitest `--maxWorkers` 4/2 (Vitest even with
-  an explicit file), pytest `-n` 4/2, Playwright `--workers` 2/1. Never `auto`, `50%` or a variable.
+- **Literal worker counts**, with a ceiling inside/outside `solo`: Jest `--maxWorkers` ceil(C/2)/2, Vitest `--maxWorkers` 4/2 (even with an explicit file), pytest `-n` 4/2,
+  Playwright `--workers` min(ceil(C/2), 4)/1. Explicit config overrides these; solo only lowers counts to the slot budget. Never `auto`, `50%` or a variable.
 - **Nothing that does not end:** no watch mode (`vitest` without `run`, `jest --watch`), no `playwright test --ui` or
   `--debug`, no `PWDEBUG`, no `playwright show-report`.
 - **Iterate on the file you touched**, with the outside ceiling: `npx jest path/to/file.test.ts --maxWorkers=2`.

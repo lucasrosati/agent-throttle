@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# solo <command...>: one heavy validation at a time on the machine (a semaphore shared by every agent and terminal).
+# solo <command...>: a bounded number of heavy validations at a time on the machine (a semaphore shared by every agent and terminal).
 #
 # The lock is a directory created with mkdir (atomic). The command runs as a background child: its PID goes to
 # $LOCK/child together with its start time (against PID reuse). If the lock owner dies (kill -9), the next solo kills
 # the child's process tree before taking the slot. A watchdog enforces the timeout (config semaphore.timeout_s,
 # SOLO_TIMEOUT overrides), counted from the start of the command: waiting for the slot does not count. On timeout the
 # whole tree is killed, the slot is released and solo exits with 124 (note "timeout" in the log).
-# Log: one TSV line per run in <logs.dir>/semaphore.log: date, wait_s, duration_s, rc, cwd, command, note.
+# Log: the original seven TSV columns plus slot, w, w_adjust, origin, peak_mb, wait_reason.
 # Settings come from `throttle-config shell`; if it fails, the built-in defaults below apply (the lock never depends
-# on Python).
+# on Python; rewriting workers requires the configured Python interpreter).
 
+PYTHON=${AT_PYTHON:-python3}   # pinned by install.sh
 src=${BASH_SOURCE[0]}
 while [ -L "$src" ]; do
   dir=$(cd -P "$(dirname "$src")" && pwd); src=$(readlink "$src")
@@ -18,7 +19,7 @@ done
 here=$(cd -P "$(dirname "$src")" && pwd)
 
 if [ $# -eq 0 ] || [ "$1" = -h ] || [ "$1" = --help ]; then
-  echo "usage: solo <command...>   (runs the command when no other solo is running; exit code = the command's)"
+  echo "usage: solo <command...>   (runs the command when a solo slot is available; exit code = the command's)"
   [ $# -eq 0 ] && exit 64 || exit 0
 fi
 
@@ -28,7 +29,13 @@ else
   echo "[solo] throttle-config failed; using built-in defaults" >&2
   export PLAYWRIGHT_HTML_OPEN=never
 fi
-LOCK=${AT_SEMAPHORE_LOCK_DIR:-/tmp/agent-throttle.lock}
+ROOT=$(cd "$here/.." && pwd)
+read -r C S <<EOF
+$("$PYTHON" "$ROOT/lib/agent_throttle/machine.py" "${SOLO_CORES:-${AT_SEMAPHORE_CORES:-auto}}" "${SOLO_SLOTS:-${AT_SEMAPHORE_SLOTS:-auto}}" 2>/dev/null)
+EOF
+case "$C" in ''|*[!0-9]*|0) C=1 ;; esac
+case "$S" in ''|*[!0-9]*|0) S=1 ;; esac
+BASE_LOCK=${AT_SEMAPHORE_LOCK_DIR:-/tmp/agent-throttle.lock}
 LOG=${AT_LOG_SEMAPHORE:-$HOME/.local/state/agent-throttle/semaphore.log}
 POLL=${AT_SEMAPHORE_POLL_S:-15}
 STALE=${AT_SEMAPHORE_STALE_LOCK_S:-60}
@@ -61,13 +68,25 @@ kill_tree() { # TERM on the tree; after 5 s, KILL what is left
 
 started_at() { ps -p "$1" -o lstart= 2>/dev/null; }
 
+owner_alive() {
+  local pid stored current
+  pid=$(cat "$1/pid" 2>/dev/null)
+  case "$pid" in ''|*[!0-9]*|0) return 0 ;; esac  # malformed identity is not permission to reap
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ ! -f "$1/pid_start" ] && return 0  # locks from older versions
+  stored=$(cat "$1/pid_start" 2>/dev/null)
+  current=$(started_at "$pid")
+  [ -z "$stored" ] || [ -z "$current" ] && return 0  # inconclusive ps read: do not steal
+  [ "$current" = "$stored" ]
+}
+
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }  # GNU first: on Linux, stat -f means "filesystem"
 
 reap_orphan_child() {
   local child start
   child=$(cat "$LOCK/child" 2>/dev/null)
   start=$(cat "$LOCK/child_start" 2>/dev/null)
-  if [ -n "$child" ] && kill -0 "$child" 2>/dev/null && [ "$(started_at "$child")" = "$start" ]; then
+  if [ -n "$child" ] && [ -n "$start" ] && kill -0 "$child" 2>/dev/null && [ "$(started_at "$child")" = "$start" ]; then
     echo "[solo] killing the tree of orphan child $child ($(cat "$LOCK/cmd" 2>/dev/null))"
     kill_tree "$child"
   fi
@@ -83,47 +102,136 @@ sanitize() {
 }
 
 t0=$(date +%s)
-until mkdir "$LOCK" 2>/dev/null; do
-  owner=$(cat "$LOCK/pid" 2>/dev/null)
-  if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
-    echo "[solo] orphan lock of PID $owner"; reap_orphan_child; rm -rf "$LOCK"; continue
-  fi
-  # a lock without a pid for longer than STALE seconds = its owner died between mkdir and writing the pid
-  if [ -z "$owner" ] && [ $(( $(date +%s) - $(mtime "$LOCK" || date +%s) )) -gt "$STALE" ]; then
-    echo "[solo] lock without owner removed"; reap_orphan_child; rm -rf "$LOCK"; continue
-  fi
-  echo "[solo] slot taken by PID ${owner:-?} ($(cat "$LOCK/cmd" 2>/dev/null)); waiting..."
+slotdir() { if [ "$1" = 1 ]; then printf '%s\n' "$BASE_LOCK"; else printf '%s.%s\n' "$BASE_LOCK" "$1"; fi; }
+GATE_PCT=${SOLO_GATE_PCT:-${AT_SEMAPHORE_GATE_PCT:-25}}
+GATE_MB=${SOLO_GATE_MB:-${AT_SEMAPHORE_GATE_MB:-auto}}
+case "$GATE_PCT" in ''|*[!0-9]*) GATE_PCT=25 ;; esac
+case "$GATE_MB" in auto) ;; ''|*[!0-9]*|0) GATE_MB=auto ;; esac
+WAIT_REASON=""
+SLOT=""
+while [ -z "$SLOT" ]; do
+  gate=""
+  for k in $(seq 1 "$S"); do
+    LOCK=$(slotdir "$k")
+    if [ "$k" -gt 1 ]; then
+      if ! gate=$("$PYTHON" "$ROOT/lib/agent_throttle/gate.py" "$LOG" "$GATE_PCT" "$GATE_MB" 2>/dev/null); then
+        gate="memory: read failed"
+      fi
+      if [ -n "$gate" ]; then WAIT_REASON=$gate; break; fi
+    fi
+    if mkdir "$LOCK" 2>/dev/null; then SLOT=$k; break; fi
+    owner=$(cat "$LOCK/pid" 2>/dev/null)
+    if [ -n "$owner" ] && ! owner_alive "$LOCK"; then
+      echo "[solo] orphan lock of PID $owner"; reap_orphan_child; rm -rf "$LOCK"
+      if mkdir "$LOCK" 2>/dev/null; then SLOT=$k; break; fi
+    fi
+    if [ -z "$owner" ] && [ $(( $(date +%s) - $(mtime "$LOCK" || date +%s) )) -gt "$STALE" ]; then
+      echo "[solo] lock without owner removed"; reap_orphan_child; rm -rf "$LOCK"
+      if mkdir "$LOCK" 2>/dev/null; then SLOT=$k; break; fi
+    fi
+  done
+  [ -n "$SLOT" ] && break
+  [ -z "$gate" ] && WAIT_REASON="slots busy"
+  echo "[solo] $WAIT_REASON; waiting..."
   sleep "$POLL"
 done
-echo $$ > "$LOCK/pid"; echo "$PWD :: $*" > "$LOCK/cmd"
-child=""; watchdog=""
+echo $$ > "$LOCK/pid"; started_at $$ > "$LOCK/pid_start"; echo "$PWD :: $*" > "$LOCK/cmd"
+OWNER_START=$(cat "$LOCK/pid_start")
+# shellcheck disable=SC2317,SC2329 # invoked by the EXIT trap across shellcheck versions
+release() {
+  if [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && [ "$(cat "$LOCK/pid_start" 2>/dev/null)" = "$OWNER_START" ]; then
+    rm -rf "$LOCK"
+  fi
+}
+trap release EXIT
+# The directory just acquired counts even before its owner files are complete.
+active=0
+for k in $(seq 1 "$S"); do [ -d "$(slotdir "$k")" ] && active=$((active + 1)); done
+[ "$active" -lt 1 ] && active=1
+W=$(( C / active )); WMAX=$(( (C + 1) / 2 ))
+[ "$W" -gt "$WMAX" ] && W=$WMAX
+[ "$W" -lt 1 ] && W=1
+printf '%s\n' "$W" > "$LOCK/w"
+PW_MAX=${SOLO_PW_MAX:-${AT_SEMAPHORE_PLAYWRIGHT_MAX_WORKERS:-4}}
+case "$PW_MAX" in ''|*[!0-9]*|0) PW_MAX=4 ;; esac
+WPW=$W; [ "$WPW" -gt "$PW_MAX" ] && WPW=$PW_MAX
+export SOLO_W=$W SOLO_W_PW=$WPW SOLO_CORES=$C SOLO_SLOT=$SLOT SOLO_SLOT_DIR=$LOCK
+PRELOAD=$ROOT/lib/agent_throttle/workers-preload.cjs
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require=\"$PRELOAD\""
+: > "$LOCK/wlog"
+echo "[solo] slot $SLOT/$S, W=$W (Playwright $WPW)"
+child=""; watchdog=""; sampler=""
 # shellcheck disable=SC2046,SC2317,SC2329 # one PID per word; called by the trap below
-on_signal() { [ -n "$child" ] && kill_tree "$child"; [ -n "$watchdog" ] && kill -TERM $(descendants "$watchdog") 2>/dev/null; exit 130; }
-trap 'rm -rf "$LOCK"' EXIT
+on_signal() {
+  [ -n "$child" ] && kill_tree "$child"
+  for p in $watchdog $sampler; do kill -TERM $(descendants "$p") 2>/dev/null; done
+  exit 130
+}
 trap on_signal INT TERM HUP
 
+if ! "$PYTHON" "$ROOT/lib/agent_throttle/workers.py" "$W" "$C" "$WPW" "$@" > "$LOCK/argv"; then
+  echo "[solo] worker rewrite failed; command not started" >&2; exit 70
+fi
+ARGS=()
+while IFS= read -r -d '' a; do ARGS+=("$a"); done < "$LOCK/argv"
 start=$(date +%s)
 wait_s=$(( start - t0 ))
-"$@" <&0 &
+"${ARGS[@]}" <&0 &
 child=$!
 echo "$child" > "$LOCK/child"; started_at "$child" > "$LOCK/child_start"
-# watchdog: if this solo dies (kill -9), the orphan watchdog must not touch ANOTHER solo's lock nor a reused PID
+watchdog_safe() {
+  kill -0 $$ 2>/dev/null && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] || return 1
+  [ -n "$OWNER_START" ] && [ "$(started_at $$)" = "$OWNER_START" ] || return 1
+  [ "$(cat "$LOCK/pid_start" 2>/dev/null)" = "$OWNER_START" ] || return 1
+  local child_start
+  child_start=$(cat "$LOCK/child_start" 2>/dev/null)
+  [ -n "$child_start" ] && [ "$(started_at "$child")" = "$child_start" ]
+}
+# An orphan watchdog cannot act on a replacement owner or a reused child PID.
 ( sleep "$TIMEOUT"
-  kill -0 $$ 2>/dev/null && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] || exit 0
+  watchdog_safe || exit 0
   echo "$TIMEOUT" > "$LOCK/timeout"; kill_tree "$child" >/dev/null 2>&1 ) &
 watchdog=$!
+tree_rss_mb() {
+  ps -axo pid=,ppid=,rss= | awk -v root="$1" '{ par[$1]=$2; rss[$1]=$3 }
+    END { for (p in par) { x=p; depth=0; while (x != root && x in par && depth++ < 64) x=par[x]
+          if (x == root) sum += rss[p] } printf "%d", sum/1024 }'
+}
+printf '0\n' > "$LOCK/peak"
+( peak=0
+  while watchdog_safe; do
+    measured=$(tree_rss_mb "$child")
+    case "$measured" in ''|*[!0-9]*) measured=0 ;; esac
+    if [ "$measured" -gt "$peak" ]; then peak=$measured; printf '%s\n' "$peak" > "$LOCK/peak"; fi
+    sleep 2
+  done ) &
+sampler=$!
 wait "$child"; rc=$?
 # shellcheck disable=SC2046
-kill -TERM $(descendants "$watchdog") 2>/dev/null; wait "$watchdog" 2>/dev/null   # without kill_tree's 1 s wait
+for p in $watchdog $sampler; do kill -TERM $(descendants "$p") 2>/dev/null; wait "$p" 2>/dev/null; done
 note=""
 if [ -f "$LOCK/timeout" ]; then
   rc=124; note=timeout
   echo "[solo] TIMEOUT: over ${TIMEOUT}s (semaphore.timeout_s / SOLO_TIMEOUT); the command's tree was killed"
 fi
 dur=$(( $(date +%s) - start ))
+origin() {
+  local pid=$$ name count=0
+  while [ "$count" -lt 40 ]; do
+    pid=$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')
+    case "$pid" in ''|*[!0-9]*|0|1) break ;; esac
+    name=$(ps -p "$pid" -o comm= 2>/dev/null)
+    case "${name##*/}" in claude*) echo claude; return ;; codex*) echo codex; return ;; esac
+    count=$((count + 1))
+  done
+  echo manual
+}
+adjust=$(cat "$LOCK/argvnote" 2>/dev/null)
+pre=$(sort -u "$LOCK/wlog" 2>/dev/null | tr '\n' ' ')
+[ -n "$pre" ] && adjust="${adjust:+$adjust; }$pre"
+peak=$(cat "$LOCK/peak" 2>/dev/null)
+"$PYTHON" "$ROOT/lib/agent_throttle/logs.py" "$LOG" "$(date '+%F %T')" "$wait_s" "$dur" "$rc" \
+  "$(sanitize "$PWD")" "$(sanitize "$*")" "$note" "$SLOT/$S" "$W" "$(sanitize "$adjust" | cut -c1-200)" \
+  "$(origin)" "${peak:-0}" "$(sanitize "$WAIT_REASON")" || echo "[solo] log append failed" >&2
 echo "[solo] rc=$rc in ${dur}s (wait ${wait_s}s)"
-# the log is written while the slot is still held (the EXIT trap releases it afterwards): two writes never interleave
-mkdir -p "$(dirname "$LOG")" 2>/dev/null
-[ -s "$LOG" ] || printf 'date\twait_s\tduration_s\trc\tcwd\tcommand\tnote\n' >> "$LOG"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date '+%F %T')" "$wait_s" "$dur" "$rc" "$(sanitize "$PWD")" "$(sanitize "$*")" "$note" >> "$LOG"
 exit $rc

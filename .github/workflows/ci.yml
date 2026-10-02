@@ -26,6 +26,23 @@ jobs:
         run: python3 tests/guard_cases.py
       - name: Config and hook
         run: python3 tests/config_cases.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Old and extended logs
+        run: python3 tests/log_cases.py
+      - name: Portable load verdict
+        run: python3 tests/load_cases.py
+      - name: Lock identity
+        run: python3 tests/identity_cases.py
+      - name: Slot admission
+        run: python3 tests/semaphore_runtime_cases.py
+      - name: Memory gate
+        run: python3 tests/gate_cases.py
+      - name: Workers and preload
+        run: python3 tests/worker_cases.py
+      - name: Hardware readers
+        run: python3 tests/machine_cases.py
       - name: Semaphore (solo)
         run: bash tests/semaphore_cases.sh
       - name: solo-ci refusals

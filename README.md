@@ -1,6 +1,6 @@
 # agent-throttle
 
-Run several coding agents (Claude Code, Codex) on one machine without taking it down. One heavy validation at a time,
+Run several coding agents (Claude Code, Codex) on one machine without taking it down. Heavy validation in hardware-derived slots,
 literal worker ceilings enforced by a hook, a memory check before each new agent, and the metrics to tune all of it.
 
 [Leia em português](README.pt-BR.md)
@@ -14,7 +14,7 @@ throttle-guard --check 'npx jest'     # blocked (jest-no-workers): Jest needs --
 ```
 
 The first line installs the commands into `~/.local/bin` and adds the hook to `~/.claude/settings.json` (backup first,
-your other hooks kept). Run `solo sleep 3` in two terminals at once to see the second one wait. The third line shows the
+your other hooks kept). Run `solo sleep 3` in more terminals than the available slots to see the excess wait. The third line shows the
 check that Claude Code now runs before every Bash command. Then paste the rules for your agents
 ([below](#rules-for-your-agents)).
 
@@ -23,9 +23,10 @@ check that Claude Code now runs before every Bash command. Then paste the rules 
 - **Version 0.1.0**, the first public release.
 - **Tested on macOS and Linux** (the guard and the semaphore): every test runs in CI on `ubuntu-latest` and
   `macos-latest`.
-- **macOS only for now:** `throttle-load` and the scheduled jobs (launchd). Linux support is welcome.
-- **Metrics are being collected:** the defaults come from measurements on one 16 GB laptop, and the weekly report is
-  gathering data on how they hold up. Numbers from other machines are welcome in an issue.
+- **Next release (Unreleased):** hardware-derived slots and workers, a memory gate, PID + start-time locks and a portable launch verdict.
+- **Scheduled jobs:** launchd on macOS; Linux timers remain a separate contribution.
+- **Runtime defaults:** slots and inside Jest/Playwright ceilings are derived from cores and RAM at runtime.
+  Use the weekly report to tune your configuration.
 
 ## The problem
 
@@ -39,10 +40,10 @@ The full story and the measurements behind every default are in [docs/why.md](do
 
 | Command | What it does |
 |---|---|
-| `solo <command>` | Runs the command when no other `solo` is running on the machine (a semaphore shared by every agent and terminal). Timeout, cleanup of dead owners, the real exit code, one log line per run. |
+| `solo <command>` | Runs in an available hardware-derived slot shared by all agents and terminals. Lowers worker counts per slot, gates extra slots on memory, handles timeout and dead owners, and logs each run. |
 | `solo-ci` | When the queue is long: pushes the branch (never forced, never `main`) and waits for the pull request CI instead. |
 | `throttle-guard` | Claude Code `PreToolUse` hook. Blocks Jest, Vitest, pytest and Playwright runs without a literal worker count or above the ceiling, full suites outside `solo` (also when the path you pass IS the suite), watch modes, interactive runners, and project-wide `tsc`. Understands `npx`, `pnpm`, `uv run`, `package.json` scripts and `bash -c`. |
-| `throttle-load` | Memory snapshot with a verdict before launching another agent: "ok to launch" or "DO NOT launch". With `--log`, one sample for the metrics. macOS only for now. |
+| `throttle-load` | Memory snapshot with a verdict before launching another agent: "ok to launch" or "DO NOT launch". Uses live memory, pressure, swap growth, thermal signals and agent counts. With `--log`, one sample for the metrics. macOS and Linux. |
 | `throttle-clean` | End of day: prunes worktrees, deletes build output inside them, offers to kill leftover test processes. |
 | `throttle-report` | Weekly Markdown report: dead sessions, memory pressure, wait for the slot, durations, timeouts, guard blocks by rule. |
 | `throttle-logrotate` | Keeps the last 60 days of logs. |
@@ -52,13 +53,19 @@ Defaults for worker ceilings, inside `solo` / outside:
 
 | Runner | Inside `solo` | Outside |
 |---|---|---|
-| Jest `--maxWorkers` | 4 | 2 |
+| Jest `--maxWorkers` | ceil(C/2) | 2 |
 | Vitest `--maxWorkers` | 4 | 2 |
 | pytest `-n` | 4 | 2 |
-| Playwright `--workers` | 2 | 1 |
+| Playwright `--workers` | min(ceil(C/2), 4) | 1 |
 
-These were measured on a 16 GB, 10-core laptop. Agents coding at once (`max_agents`) default to
-`floor((RAM in GB - 6) / 2)`, between 1 and 12: 5 on 16 GB, 12 on 32 GB or more.
+Inside ceilings are derived from cores and RAM at runtime; explicit `[limits]` pairs override them. C is the
+performance-core count on macOS (logical CPUs as fallback), or `nproc` on Linux. `solo` fixes
+W = min(ceil(C/2), floor(C/occupied_slots)) at acquisition and only lowers flags. Playwright is capped at 4 by default.
+Slots = max(1, min(floor(C/max(1, floor(C/2))), floor(RAM_GB/10))); override slots/cores through config or `SOLO_SLOTS` /
+`SOLO_CORES`. Extra slots need at least 25% free memory and the recent suite peak p90; slot 1 bypasses this gate.
+
+Agents coding at once (`max_agents`) default to
+`floor((RAM in GB - 6) / 2)`, between 1 and 12. This is a memory budget; set an integer for your separate quota ceiling.
 
 ## Install
 
@@ -108,8 +115,8 @@ of the repository.
 | | macOS | Linux |
 |---|---|---|
 | `solo`, `solo-ci`, `throttle-guard`, `throttle-config`, `throttle-clean`, `throttle-logrotate` | yes | yes |
-| `throttle-report` | yes | reads the logs; no memory samples yet |
-| `throttle-load` | yes | not yet |
+| `throttle-report` | yes | yes |
+| `throttle-load` | yes | yes, with conservative signal fallbacks |
 | scheduled jobs | launchd | not yet (systemd timers welcome) |
 
 Built for Claude Code 2.1 (the hook) and the Codex CLI 0.15 (rules only, no hook). CI runs every test on
@@ -121,7 +128,12 @@ Built for Claude Code 2.1 (the hook) and the Codex CLI 0.15 (rules only, no hook
 - The guard does not read Jest `projects` or `testRegex`-only configs, nor config values that are not string literals;
   `node --test`, `python -m unittest` and `make` are not recognized. See
   [docs/how-it-works.md](docs/how-it-works.md#known-gaps).
-- `throttle-load` and the scheduled jobs are macOS only in v0.1.0.
+- The Node preload covers Jest/Playwright in npm/pnpm/yarn scripts. `cross-env NODE_OPTIONS=...` replaces it; the guard
+  still requires literal flags. Node is optional for non-Node commands.
+- Linux memory pressure uses PSI (`some.avg10` >= 1% yellow, `full.avg10` >= 10% red, configurable). Missing PSI or usable
+  hot/critical thermal trips closes the launch verdict. These signals are not interchangeable with macOS pressure.
+- A launch verdict needs a swap sample within 30 minutes: `throttle-load --log`. Total swap above RAM/8 only warns unless
+  you explicitly retain the legacy `max_swap_mb` limit. Scheduled jobs remain macOS-only.
 
 ## Docs
 
@@ -134,8 +146,7 @@ Built for Claude Code 2.1 (the hook) and the Codex CLI 0.15 (rules only, no hook
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Linux support for `throttle-load` and scheduled jobs is the most wanted
-contribution.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Linux scheduled jobs and measurements from other hardware are welcome contributions.
 
 ## License
 
