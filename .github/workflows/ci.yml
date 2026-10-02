@@ -29,6 +29,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Portable load verdict
+        run: python3 tests/load_cases.py
       - name: Lock identity
         run: python3 tests/identity_cases.py
       - name: Slot admission

@@ -65,9 +65,19 @@ heavy_scripts = ["validate:local", "typecheck"]
 log_blocks = true
 
 [load]
-# throttle-load says "DO NOT launch" below this free memory percentage or above this swap usage.
+# throttle-load blocks below this free percentage, on red pressure, rising swap, thermal warnings or failed reads.
 min_free_pct = 25
-max_swap_mb = 3072
+# Legacy report threshold. An explicit value also preserves the old absolute launch limit.
+# Leave unset for the new verdict: total swap alone warns only above RAM/8.
+# max_swap_mb = 3072
+swap_window_min = 30
+swap_delta_mb = 512
+swap_warn_ram_divisor = 8
+# Linux PSI avg10: some >= 1% is yellow, full >= 10% is red. Missing PSI is a failed read.
+psi_yellow_pct = 1
+psi_red_pct = 10
+# Agent helper subcommands/names excluded from counting.
+helper_processes = ["app-server", "exec-server", "mcp-server", "--chrome-native-host"]
 # Coding agents at once. "auto" = floor((total RAM in GB - 6) / 2), clamped to 1..12:
 #   8 GB -> 1, 16 GB -> 5, 24 GB -> 9, 32 GB or more -> 12.
 # 6 GB are reserved for the OS and apps (~2 GB) plus one heavy validation inside solo (~4 GB peak); each agent gets
@@ -75,7 +85,7 @@ max_swap_mb = 3072
 max_agents = "auto"
 # Process names counted as agent sessions (basename of the executable).
 agent_processes = ["claude", "codex"]
-# Regular expression (awk) for processes counted as test runs.
+# Regular expression (Python) for processes counted as test runs.
 test_process_regex = "jest|vitest|pytest|playwright|(^|[/ ])tsc( |$)"
 
 [clean]

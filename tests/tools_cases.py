@@ -3,7 +3,6 @@
 directory (never the real logs). Usage: python3 tests/tools_cases.py (rc=0 = every case passed)."""
 import datetime as dt
 import os
-import platform
 import subprocess
 import sys
 import tempfile
@@ -97,17 +96,11 @@ with open(os.path.join(rot, 'semaphore.log')) as fh:
 ok('missing logs reported, no crash', r.returncode == 0 and 'load.log: does not exist' in r.stdout)
 
 # ---------------------------------------------------------------- throttle-load
-if platform.system() == 'Darwin':
-    r = run('throttle-load', '--log')
-    with open(os.path.join(LOGS, 'load.log')) as fh:
-        last = fh.read().splitlines()[-1].split('\t')
-    ok('load --log appends a 7-column line', r.returncode == 0 and len(last) == 7 and last[1].isdigit()
-       and last[2] in ('green', 'yellow', 'red', 'unknown') and last[6] in ('yes', 'no'))
-    r = run('throttle-load')
-    ok('load prints a verdict', r.returncode == 0 and '== VERDICT: ' in r.stdout and 'up to 5' in r.stdout)
-else:
-    r = run('throttle-load')
-    ok('load on Linux: clear message, exit 3', r.returncode == 3 and 'macOS only' in r.stderr)
+r = run('throttle-load')
+ok('load on macOS and Linux prints a conservative verdict', r.returncode == 0 and '== VERDICT: ' in r.stdout
+   and 'up to 5' in r.stdout)
+r = run('throttle-load', '--help')
+ok('load help works on both platforms', r.returncode == 0 and '--log' in r.stdout)
 
 # ---------------------------------------------------------------- throttle-clean
 repo = os.path.join(TMP, 'repo')

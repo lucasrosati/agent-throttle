@@ -44,6 +44,7 @@ C='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/config_cases.py"'
 B='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/gate_cases.py"'
 I='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/semaphore_runtime_cases.py"'
 D='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/identity_cases.py"'
+L='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/load_cases.py"'
 GUARD=lib/agent_throttle/guard.py
 
 # control: an unmodified copy must pass both batteries, or a "killed" below would prove nothing
@@ -128,6 +129,29 @@ check legacy-lock-stolen bin/solo \
   '[ ! -f "$1/pid_start" ] && return 0' '[ ! -f "$1/pid_start" ] && return 1' "$D"
 check stale-lock-kept bin/solo \
   '-gt "$STALE"' '-gt 9999999999' "$D"
+
+check load-swap-delta-ignored lib/agent_throttle/load.py \
+  "elif delta > settings['swap_delta_mb']:" 'elif False:' "$L"
+check load-yellow-ignored lib/agent_throttle/load.py \
+  "if pressure == 'yellow' and delta is not None and delta > 0:" 'if False:' "$L"
+check load-red-ignored lib/agent_throttle/load.py \
+  "if pressure == 'red':" 'if False:' "$L"
+check load-thermal-ignored lib/agent_throttle/load.py \
+  "if signals['thermal']:" 'if False:' "$L"
+check load-read-fails-open lib/agent_throttle/load.py \
+  'if missing:' 'if False:' "$L"
+check load-free-ignored lib/agent_throttle/load.py \
+  "if free is not None and free < settings['min_free_pct']:" 'if False:' "$L"
+check load-agents-ignored lib/agent_throttle/load.py \
+  "if total >= settings['max_agents']:" 'if False:' "$L"
+check load-helpers-counted lib/agent_throttle/load.py \
+  'excluded.intersection(tokens)' 'False' "$L"
+check load-cores-fixed lib/agent_throttle/load.py \
+  "cores=machine.cores() if override == 'auto' else machine.positive(override)" 'cores=4' "$L"
+check load-swap-warning-ignored lib/agent_throttle/load.py \
+  "if swap is not None and ram and swap > ram / 2**20 / settings['swap_warn_ram_divisor']:" 'if False:' "$L"
+check load-window-last-sample lib/agent_throttle/load.py \
+  'return current - previous' 'return 0' "$L"
 
 echo "$killed killed, $survived survived, $broken broken"
 [ $survived = 0 ] && [ $broken = 0 ]

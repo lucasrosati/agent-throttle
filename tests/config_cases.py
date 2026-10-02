@@ -73,6 +73,9 @@ ok('derived guard limit passes and blocks at boundary', rule(g, 'solo jest --max
    and rule(g, 'solo jest --maxWorkers=9') == 'jest-over-limit'
    and rule(g, 'solo playwright test --workers=4') == 'ok'
    and rule(g, 'solo playwright test --workers=5') == 'playwright-over-limit')
+ok('load thresholds default to documented values', dynamic['load']['swap_window_min'] == 30
+   and dynamic['load']['swap_delta_mb'] == 512 and dynamic['load']['swap_warn_ram_divisor'] == 8
+   and dynamic['load']['min_free_pct'] == 25 and dynamic['_max_swap_explicit'] is False)
 os.environ['SOLO_CORES'] = '7'
 
 # ---- the guard reads limits, aliases and heavy scripts from the file
