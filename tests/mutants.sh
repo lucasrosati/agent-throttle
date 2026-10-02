@@ -25,7 +25,7 @@ EOF
 check() { # check <name> <file relative to the copy> <old> <new> <battery command using $COPY>
   local name=$1 rel=$2 old=$3 new=$4 cmd=$5
   COPY=$T/$name; rm -rf "$COPY"; mkdir -p "$COPY"
-  cp -R "$REPO/bin" "$REPO/lib" "$REPO/config" "$COPY/"
+  cp -R "$REPO/bin" "$REPO/lib" "$REPO/config" "$REPO/scripts" "$COPY/"
   if ! mutate "$COPY/$rel" "$old" "$new"; then
     echo "BROKEN   $name (replacement text not found in $rel)"; broken=$((broken + 1)); return
   fi
@@ -46,12 +46,13 @@ I='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/semaphore_runtime_cases.py"'
 D='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/identity_cases.py"'
 L='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/load_cases.py"'
 R='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/log_cases.py"'
+E='LEAK_CHECK_PATH=$COPY/scripts/leak_check.py bash "$REPO/tests/leak_cases.sh"'
 GUARD=lib/agent_throttle/guard.py
 
 # control: an unmodified copy must pass both batteries, or a "killed" below would prove nothing
-COPY=$T/control; mkdir -p "$COPY"; cp -R "$REPO/bin" "$REPO/lib" "$REPO/config" "$COPY/"
+COPY=$T/control; mkdir -p "$COPY"; cp -R "$REPO/bin" "$REPO/lib" "$REPO/config" "$REPO/scripts" "$COPY/"
 control_ok=1
-for battery in "$G" "$S" "$M" "$W" "$B" "$C" "$I" "$D" "$L" "$R"; do
+for battery in "$G" "$S" "$M" "$W" "$B" "$C" "$I" "$D" "$L" "$R" "$E"; do
   if ! COPY=$COPY eval "$battery" >> "$T/control.out" 2>&1; then control_ok=0; fi
 done
 if [ "$control_ok" = 1 ]; then
@@ -171,6 +172,9 @@ check load-extra-columns-missing lib/agent_throttle/load.py \
 
 check gate-too-few-samples lib/agent_throttle/gate.py \
   'if len(samples) < 5:' 'if len(samples) < 4:' "$B"
+
+check github-merge-identity-rejected scripts/leak_check.py \
+  '|^noreply@github\.com$' '' "$E"
 
 echo "$killed killed, $survived survived, $broken broken"
 [ $survived = 0 ] && [ $broken = 0 ]

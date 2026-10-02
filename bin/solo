@@ -137,7 +137,7 @@ while [ -z "$SLOT" ]; do
 done
 echo $$ > "$LOCK/pid"; started_at $$ > "$LOCK/pid_start"; echo "$PWD :: $*" > "$LOCK/cmd"
 OWNER_START=$(cat "$LOCK/pid_start")
-# shellcheck disable=SC2329 # invoked by the EXIT trap
+# shellcheck disable=SC2317,SC2329 # invoked by the EXIT trap across shellcheck versions
 release() {
   if [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && [ "$(cat "$LOCK/pid_start" 2>/dev/null)" = "$OWNER_START" ]; then
     rm -rf "$LOCK"

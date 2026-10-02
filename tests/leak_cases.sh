@@ -5,7 +5,7 @@
 # file itself does not match the patterns; the shell joins them at run time.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
-LC=$here/../scripts/leak_check.py
+LC=${LEAK_CHECK_PATH:-$here/../scripts/leak_check.py}
 PYTHON_BIN=${PYTHON:-python3}
 T=$(mktemp -d "${TMPDIR:-/tmp}/leak-cases.XXXXXX"); trap 'rm -rf "$T"' EXIT
 fails=0; n=0
@@ -18,6 +18,11 @@ g add -A && g commit -qm clean
 "$PYTHON_BIN" "$LC" --history > "$T/o1"; rc=$?
 ok 'placeholders and example addresses pass' '[ $rc = 0 ] && grep -q "0 finding" "$T/o1"'
 
+# Pull-request CI includes a merge commit constructed by GitHub, with its public bot identity.
+git -c user.name=GitHub -c user.email='noreply''@github.com' commit -q --allow-empty -m 'synthetic merge identity'
+"$PYTHON_BIN" "$LC" --history > "$T/bot"; rc=$?
+ok 'GitHub synthetic merge identity passes history scan' '[ $rc = 0 ]'
+
 leak() { # leak <name> <content> <rule>
   printf '%s\n' "$2" > leak.txt
   "$PYTHON_BIN" "$LC" > "$T/o2"; rc=$?
@@ -27,6 +32,7 @@ leak() { # leak <name> <content> <rule>
 leak 'macOS home path' 'see /Users/''alice/code' home-path
 leak 'Linux home path' 'see /home/''bob/code' home-path
 leak 'e-mail address' 'ping alice''@corp.io' email
+leak 'other noreply address still blocked' 'noreply''@corp.io' email
 leak 'GitHub token' "token ghp_$(printf 'a%.0s' $(seq 1 36))" github-token
 leak 'sk- style key' "key sk-$(printf 'b%.0s' $(seq 1 30))" api-key
 leak 'AWS key' 'AKIA''ABCDEFGHIJKLMNOP' aws-key
