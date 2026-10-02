@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """guard: PreToolUse(Bash) hook for Claude Code (entry point: bin/throttle-guard).
 
-One heavy validation at a time on the machine (`solo`) and parallelism with a LITERAL number. Rules per runner
+Bounded heavy validation on the machine (`solo`) and parallelism with a LITERAL number. Rules per runner
 (ceiling inside `solo` / outside, from [limits] in the config; defaults below):
-  - Jest (4/2) and Vitest (4/2): workers required (--maxWorkers=N; in Vitest also --no-file-parallelism = 1), even
+  - Jest (derived/2) and Vitest (4/2): workers required (--maxWorkers=N; in Vitest also --no-file-parallelism = 1), even
     with an explicit file; the full suite (no filter) only through `solo`.
   - pytest (4/2): -n/--numprocesses only literal (auto/logical blocked); without -n it runs in 1 process and passes.
     Full suite (no path, `file::test` or --lf) only through `solo`; -k and -m do NOT count as a target.
@@ -13,7 +13,7 @@ One heavy validation at a time on the machine (`solo`) and parallelism with a LI
     optimizeDeps do not count) or an ancestor. Jest: rootDir, `roots` and the fixed prefix of `testMatch`, from
     jest.config.* or the "jest" key of package.json found walking up from the cwd (also for --testPathPattern).
     Playwright: the config directory and `testDir`. Without a known cwd (`--filter`, `-r`, `$VAR`) any path is a target.
-  - Playwright (2/1): --workers/-j required and literal; full suite only through `solo`; --ui, --debug, PWDEBUG,
+  - Playwright (derived/1): --workers/-j required and literal; full suite only through `solo`; --ui, --debug, PWDEBUG,
     PWTEST_WATCH and the interactive commands (show-report, codegen, open) are always blocked.
   - Watch mode (jest --watch/--watchAll, vitest without run/--run, vitest watch|dev, -w/--watch) is always blocked:
     inside `solo` it would hold the slot forever.
@@ -436,7 +436,7 @@ def wide_target(arg, cwd, dirs):
 
 
 def suite_msg(what, wide, how):
-    return (f"Full {what} suite only through '{SEM} <command>' (one heavy validation at a time on the machine)"
+    return (f"Full {what} suite only through '{SEM} <command>' (bounded heavy validation on the machine)"
             f"{' (' + wide + ')' if wide else ''}. To iterate, pass {how}.")
 
 
@@ -938,8 +938,8 @@ def check_rule(cmd, in_sem_outer=False, depth=0, cwd=None, env=None):
         runner, args, run_cwd = found
         if runner == 'tsc':
             if not in_sem and not any(a in TSC_HARMLESS for a in args) and tsc_is_project(args):
-                return 'tsc-project-outside-semaphore', (f"Project-wide tsc only through '{SEM} <command>' (one heavy "
-                                                         'validation at a time). tsc on a single file is fine.')
+                return 'tsc-project-outside-semaphore', (f"Project-wide tsc only through '{SEM} <command>' (bounded heavy "
+                                                         'validation). tsc on a single file is fine.')
             continue
         via_script = depth > 0
         hit = (rule_jest(args, in_sem, via_script, run_cwd) if runner == 'jest' else

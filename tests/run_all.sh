@@ -16,6 +16,7 @@ step() { # step <name> <command...>
 }
 step guard "$PY" tests/guard_cases.py
 step config "$PY" tests/config_cases.py
+step workers "$PY" tests/worker_cases.py
 step machine "$PY" tests/machine_cases.py
 step semaphore bash tests/semaphore_cases.sh
 step solo-ci bash tests/solo_ci_cases.sh

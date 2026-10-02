@@ -26,6 +26,11 @@ jobs:
         run: python3 tests/guard_cases.py
       - name: Config and hook
         run: python3 tests/config_cases.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Workers and preload
+        run: python3 tests/worker_cases.py
       - name: Hardware readers
         run: python3 tests/machine_cases.py
       - name: Semaphore (solo)

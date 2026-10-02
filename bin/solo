@@ -111,6 +111,22 @@ while [ -z "$SLOT" ]; do
   sleep "$POLL"
 done
 echo $$ > "$LOCK/pid"; echo "$PWD :: $*" > "$LOCK/cmd"
+# The directory just acquired counts even before its owner files are complete.
+active=0
+for k in $(seq 1 "$S"); do [ -d "$(slotdir "$k")" ] && active=$((active + 1)); done
+[ "$active" -lt 1 ] && active=1
+W=$(( C / active )); WMAX=$(( (C + 1) / 2 ))
+[ "$W" -gt "$WMAX" ] && W=$WMAX
+[ "$W" -lt 1 ] && W=1
+printf '%s\n' "$W" > "$LOCK/w"
+PW_MAX=${SOLO_PW_MAX:-${AT_SEMAPHORE_PLAYWRIGHT_MAX_WORKERS:-4}}
+case "$PW_MAX" in ''|*[!0-9]*|0) PW_MAX=4 ;; esac
+WPW=$W; [ "$WPW" -gt "$PW_MAX" ] && WPW=$PW_MAX
+export SOLO_W=$W SOLO_W_PW=$WPW SOLO_CORES=$C SOLO_SLOT=$SLOT SOLO_SLOT_DIR=$LOCK
+PRELOAD=$ROOT/lib/agent_throttle/workers-preload.cjs
+export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--require=\"$PRELOAD\""
+: > "$LOCK/wlog"
+echo "[solo] slot $SLOT/$S, W=$W (Playwright $WPW)"
 child=""; watchdog=""
 # shellcheck disable=SC2046,SC2317,SC2329 # one PID per word; called by the trap below
 on_signal() { [ -n "$child" ] && kill_tree "$child"; [ -n "$watchdog" ] && kill -TERM $(descendants "$watchdog") 2>/dev/null; exit 130; }
@@ -119,7 +135,12 @@ trap on_signal INT TERM HUP
 
 start=$(date +%s)
 wait_s=$(( start - t0 ))
-"$@" <&0 &
+if ! "$PYTHON" "$ROOT/lib/agent_throttle/workers.py" "$W" "$C" "$WPW" "$@" > "$LOCK/argv"; then
+  echo "[solo] worker rewrite failed; command not started" >&2; exit 70
+fi
+ARGS=()
+while IFS= read -r -d '' a; do ARGS+=("$a"); done < "$LOCK/argv"
+"${ARGS[@]}" <&0 &
 child=$!
 echo "$child" > "$LOCK/child"; started_at "$child" > "$LOCK/child_start"
 # watchdog: if this solo dies (kill -9), the orphan watchdog must not touch ANOTHER solo's lock nor a reused PID

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import tomllib
 
+from . import machine
+
 DEFAULTS = {
     'semaphore': {
         'aliases': [],                        # extra command names the guard treats as "inside the semaphore"
@@ -22,10 +24,11 @@ DEFAULTS = {
         'stale_lock_s': 60,
         'slots': 'auto',
         'cores': 'auto',
+        'playwright_max_workers': 4,
         'env': {'PLAYWRIGHT_HTML_OPEN': 'never'},
         'ci': {'timeout_s': 3600, 'interval_s': 30, 'min_checks': 0},
     },
-    'limits': {  # [inside the semaphore, outside]; measured on a 16 GB, 10-core laptop
+    'limits': {  # [inside the semaphore, outside]; Jest/Playwright defaults are resolved at load time
         'jest': [4, 2],
         'vitest': [4, 2],
         'pytest': [4, 2],
@@ -106,6 +109,8 @@ def _same_type(default, value):
 def _valid(path, default, value):
     if path in ('load.max_agents', 'semaphore.slots', 'semaphore.cores'):
         return value == 'auto' or (isinstance(value, int) and not isinstance(value, bool) and value > 0)
+    if path == 'semaphore.playwright_max_workers':
+        return isinstance(value, int) and not isinstance(value, bool) and value > 0
     if path.startswith('limits.'):
         return (isinstance(value, list) and len(value) == 2 and
                 all(isinstance(v, int) and not isinstance(v, bool) and v > 0 for v in value))
@@ -146,14 +151,26 @@ def load(path=None):
     path = Path(path) if path else config_path()
     cfg['_file'] = str(path)
     cfg['_loaded'] = False
+    data = {}
     if path.is_file():
         try:
             with open(path, 'rb') as fh:
                 data = tomllib.load(fh)
-            _merge(cfg, data)
             cfg['_loaded'] = True
         except (OSError, tomllib.TOMLDecodeError) as exc:
             warn(f'could not read {path}: {exc} (using defaults)')
+    sem = data.get('semaphore', {})
+    sem = sem if isinstance(sem, dict) else {}
+    core_override = sem.get('cores', 'auto')
+    if not _valid('semaphore.cores', 'auto', core_override):
+        core_override = 'auto'
+    c, _ = machine.settings(os.environ.get('SOLO_CORES', core_override))
+    pw = sem.get('playwright_max_workers', 4)
+    if not _valid('semaphore.playwright_max_workers', 4, pw):
+        pw = 4
+    cfg['limits']['jest'] = [(c + 1) // 2, 2]
+    cfg['limits']['playwright'] = [min((c + 1) // 2, pw), 1]
+    _merge(cfg, data)
     state = os.environ.get('XDG_STATE_HOME') or os.path.expanduser('~/.local/state')
     logs_dir = cfg['logs']['dir'] or os.path.join(state, 'agent-throttle')
     cfg['logs']['dir'] = os.path.expanduser(logs_dir)

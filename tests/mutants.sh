@@ -39,6 +39,8 @@ check() { # check <name> <file relative to the copy> <old> <new> <battery comman
 G='GUARD_PATH=$COPY/lib/agent_throttle/guard.py "$PYTHON_BIN" "$REPO/tests/guard_cases.py"'
 S='SOLO_PATH=$COPY/bin/solo bash "$REPO/tests/semaphore_cases.sh"'
 M='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/machine_cases.py"'
+W='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/worker_cases.py"'
+C='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/config_cases.py"'
 GUARD=lib/agent_throttle/guard.py
 
 # control: an unmodified copy must pass both batteries, or a "killed" below would prove nothing
@@ -78,6 +80,26 @@ check performance-cores-ignored lib/agent_throttle/machine.py \
   "positive(command('sysctl', '-n', 'hw.perflevel0.logicalcpu'))" 'None' "$M"
 check linux-memory-unavailable lib/agent_throttle/machine.py \
   "available = info['MemTotal'], info['MemAvailable']" "available = info['MemTotal'], 0" "$M"
+
+check workers-fixed lib/agent_throttle/workers.py \
+  'return max(1, min((cores + 1) // 2, cores // max(1, occupied)))' 'return 8' "$W"
+check workers-raised lib/agent_throttle/workers.py \
+  'if n is None or n > limit:' 'if True:' "$W"
+check workers-unlimited lib/agent_throttle/workers.py \
+  'if n is None or n > limit:' 'if False:' "$W"
+check workers-no-injection lib/agent_throttle/workers.py \
+  "if not seen and kind in ('jest', 'playwright'):" 'if False:' "$W"
+check playwright-uncapped lib/agent_throttle/workers.py \
+  "cap = wpw if kind == 'playwright' else w" 'cap = w' "$W"
+check preload-no-cap lib/agent_throttle/workers-preload.cjs \
+  'if (n === null || n > w)' 'if (false)' "$W"
+check preload-no-injection lib/agent_throttle/workers-preload.cjs \
+  'if (!seen)' 'if (false)' "$W"
+
+check derived-limits-fixed lib/agent_throttle/config.py \
+  "cfg['limits']['jest'] = [(c + 1) // 2, 2]" "cfg['limits']['jest'] = [4, 2]" "$C"
+check explicit-limits-ignored lib/agent_throttle/config.py \
+  '_merge(cfg, data)' '_merge(cfg, {k: v for k, v in data.items() if k != "limits"})' "$C"
 
 echo "$killed killed, $survived survived, $broken broken"
 [ $survived = 0 ] && [ $broken = 0 ]
