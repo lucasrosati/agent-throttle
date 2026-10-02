@@ -41,6 +41,8 @@ S='SOLO_PATH=$COPY/bin/solo bash "$REPO/tests/semaphore_cases.sh"'
 M='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/machine_cases.py"'
 W='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/worker_cases.py"'
 C='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/config_cases.py"'
+B='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/gate_cases.py"'
+I='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/semaphore_runtime_cases.py"'
 GUARD=lib/agent_throttle/guard.py
 
 # control: an unmodified copy must pass both batteries, or a "killed" below would prove nothing
@@ -100,6 +102,24 @@ check derived-limits-fixed lib/agent_throttle/config.py \
   "cfg['limits']['jest'] = [(c + 1) // 2, 2]" "cfg['limits']['jest'] = [4, 2]" "$C"
 check explicit-limits-ignored lib/agent_throttle/config.py \
   '_merge(cfg, data)' '_merge(cfg, {k: v for k, v in data.items() if k != "limits"})' "$C"
+
+check gate-percent-ignored lib/agent_throttle/gate.py \
+  'if level < pct:' 'if False:' "$B"
+check gate-mb-ignored lib/agent_throttle/gate.py \
+  'if free < need:' 'if False:' "$B"
+check gate-read-fails-open lib/agent_throttle/gate.py \
+  "return 'memory: read failed'" "return ''" "$B"
+check gate-history-ignored lib/agent_throttle/gate.py \
+  'if len(samples) < 5:' 'if True:' "$B"
+check gate-history-unbounded lib/agent_throttle/gate.py \
+  'maxlen=50' 'maxlen=500' "$B"
+
+check additional-slot-gate-bypassed bin/solo \
+  'if [ "$k" -gt 1 ]; then' 'if false; then' "$I"
+check slot-one-gated bin/solo \
+  'if [ "$k" -gt 1 ]; then' 'if true; then' "$I"
+check solo-workers-fixed bin/solo \
+  'W=$(( C / active ))' 'W=8' "$I"
 
 echo "$killed killed, $survived survived, $broken broken"
 [ $survived = 0 ] && [ $broken = 0 ]

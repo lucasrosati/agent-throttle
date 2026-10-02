@@ -91,10 +91,22 @@ sanitize() {
 
 t0=$(date +%s)
 slotdir() { if [ "$1" = 1 ]; then printf '%s\n' "$BASE_LOCK"; else printf '%s.%s\n' "$BASE_LOCK" "$1"; fi; }
+GATE_PCT=${SOLO_GATE_PCT:-${AT_SEMAPHORE_GATE_PCT:-25}}
+GATE_MB=${SOLO_GATE_MB:-${AT_SEMAPHORE_GATE_MB:-auto}}
+case "$GATE_PCT" in ''|*[!0-9]*) GATE_PCT=25 ;; esac
+case "$GATE_MB" in auto) ;; ''|*[!0-9]*|0) GATE_MB=auto ;; esac
+WAIT_REASON=""
 SLOT=""
 while [ -z "$SLOT" ]; do
+  gate=""
   for k in $(seq 1 "$S"); do
     LOCK=$(slotdir "$k")
+    if [ "$k" -gt 1 ]; then
+      if ! gate=$("$PYTHON" "$ROOT/lib/agent_throttle/gate.py" "$LOG" "$GATE_PCT" "$GATE_MB" 2>/dev/null); then
+        gate="memory: read failed"
+      fi
+      if [ -n "$gate" ]; then WAIT_REASON=$gate; break; fi
+    fi
     if mkdir "$LOCK" 2>/dev/null; then SLOT=$k; break; fi
     owner=$(cat "$LOCK/pid" 2>/dev/null)
     if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
@@ -107,7 +119,8 @@ while [ -z "$SLOT" ]; do
     fi
   done
   [ -n "$SLOT" ] && break
-  echo "[solo] $S slots busy; waiting..."
+  [ -z "$gate" ] && WAIT_REASON="slots busy"
+  echo "[solo] $WAIT_REASON; waiting..."
   sleep "$POLL"
 done
 echo $$ > "$LOCK/pid"; echo "$PWD :: $*" > "$LOCK/cmd"

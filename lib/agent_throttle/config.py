@@ -25,6 +25,8 @@ DEFAULTS = {
         'slots': 'auto',
         'cores': 'auto',
         'playwright_max_workers': 4,
+        'gate_pct': 25,
+        'gate_mb': 'auto',
         'env': {'PLAYWRIGHT_HTML_OPEN': 'never'},
         'ci': {'timeout_s': 3600, 'interval_s': 30, 'min_checks': 0},
     },
@@ -107,8 +109,10 @@ def _same_type(default, value):
 
 
 def _valid(path, default, value):
-    if path in ('load.max_agents', 'semaphore.slots', 'semaphore.cores'):
+    if path in ('load.max_agents', 'semaphore.slots', 'semaphore.cores', 'semaphore.gate_mb'):
         return value == 'auto' or (isinstance(value, int) and not isinstance(value, bool) and value > 0)
+    if path in ('semaphore.gate_pct', 'load.min_free_pct'):
+        return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100
     if path == 'semaphore.playwright_max_workers':
         return isinstance(value, int) and not isinstance(value, bool) and value > 0
     if path.startswith('limits.'):

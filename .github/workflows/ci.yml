@@ -29,6 +29,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Slot admission
+        run: python3 tests/semaphore_runtime_cases.py
+      - name: Memory gate
+        run: python3 tests/gate_cases.py
       - name: Workers and preload
         run: python3 tests/worker_cases.py
       - name: Hardware readers

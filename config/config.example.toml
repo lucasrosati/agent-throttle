@@ -28,6 +28,11 @@ slots = "auto"
 cores = "auto"
 # Playwright cap applied in addition to W. SOLO_PW_MAX overrides.
 playwright_max_workers = 4
+# Additional slots need this percentage free AND the p90 peak MB of the last 50 log rows (at least 5 samples).
+# Without history, 25% of RAM is required. Failed reads close the gate. Slot 1 bypasses it.
+# SOLO_GATE_PCT and SOLO_GATE_MB override these keys.
+gate_pct = 25
+gate_mb = "auto"
 
 [semaphore.env]
 # Exported to the command that solo runs. Playwright's html reporter opens a server and waits for Ctrl+C after a
