@@ -43,6 +43,7 @@ W='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/worker_cases.py"'
 C='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/config_cases.py"'
 B='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/gate_cases.py"'
 I='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/semaphore_runtime_cases.py"'
+D='THROTTLE_ROOT=$COPY "$PYTHON_BIN" "$REPO/tests/identity_cases.py"'
 GUARD=lib/agent_throttle/guard.py
 
 # control: an unmodified copy must pass both batteries, or a "killed" below would prove nothing
@@ -68,7 +69,7 @@ check jest-limits-swapped $GUARD \
 check scripts-not-resolved $GUARD \
   '            if resolved and depth < 3:' '            if False:' "$G"
 check watchdog-without-owner-check bin/solo \
-  '  kill -0 $$ 2>/dev/null && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] || exit 0' '  :' "$S"
+  '  watchdog_safe || exit 0' '  :' "$S"
 check kill-only-the-child bin/solo \
   '  pids=$(descendants "$1")' '  pids=$1' "$S"
 check log-not-sanitized bin/solo \
@@ -120,6 +121,13 @@ check slot-one-gated bin/solo \
   'if [ "$k" -gt 1 ]; then' 'if true; then' "$I"
 check solo-workers-fixed bin/solo \
   'W=$(( C / active ))' 'W=8' "$I"
+
+check owner-start-ignored bin/solo \
+  '[ "$current" = "$stored" ]' 'return 0' "$D"
+check legacy-lock-stolen bin/solo \
+  '[ ! -f "$1/pid_start" ] && return 0' '[ ! -f "$1/pid_start" ] && return 1' "$D"
+check stale-lock-kept bin/solo \
+  '-gt "$STALE"' '-gt 9999999999' "$D"
 
 echo "$killed killed, $survived survived, $broken broken"
 [ $survived = 0 ] && [ $broken = 0 ]

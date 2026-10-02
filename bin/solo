@@ -68,13 +68,25 @@ kill_tree() { # TERM on the tree; after 5 s, KILL what is left
 
 started_at() { ps -p "$1" -o lstart= 2>/dev/null; }
 
+owner_alive() {
+  local pid stored current
+  pid=$(cat "$1/pid" 2>/dev/null)
+  case "$pid" in ''|*[!0-9]*|0) return 0 ;; esac  # malformed identity is not permission to reap
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ ! -f "$1/pid_start" ] && return 0  # locks from older versions
+  stored=$(cat "$1/pid_start" 2>/dev/null)
+  current=$(started_at "$pid")
+  [ -z "$stored" ] || [ -z "$current" ] && return 0  # inconclusive ps read: do not steal
+  [ "$current" = "$stored" ]
+}
+
 mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }  # GNU first: on Linux, stat -f means "filesystem"
 
 reap_orphan_child() {
   local child start
   child=$(cat "$LOCK/child" 2>/dev/null)
   start=$(cat "$LOCK/child_start" 2>/dev/null)
-  if [ -n "$child" ] && kill -0 "$child" 2>/dev/null && [ "$(started_at "$child")" = "$start" ]; then
+  if [ -n "$child" ] && [ -n "$start" ] && kill -0 "$child" 2>/dev/null && [ "$(started_at "$child")" = "$start" ]; then
     echo "[solo] killing the tree of orphan child $child ($(cat "$LOCK/cmd" 2>/dev/null))"
     kill_tree "$child"
   fi
@@ -109,7 +121,7 @@ while [ -z "$SLOT" ]; do
     fi
     if mkdir "$LOCK" 2>/dev/null; then SLOT=$k; break; fi
     owner=$(cat "$LOCK/pid" 2>/dev/null)
-    if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+    if [ -n "$owner" ] && ! owner_alive "$LOCK"; then
       echo "[solo] orphan lock of PID $owner"; reap_orphan_child; rm -rf "$LOCK"
       if mkdir "$LOCK" 2>/dev/null; then SLOT=$k; break; fi
     fi
@@ -123,7 +135,14 @@ while [ -z "$SLOT" ]; do
   echo "[solo] $WAIT_REASON; waiting..."
   sleep "$POLL"
 done
-echo $$ > "$LOCK/pid"; echo "$PWD :: $*" > "$LOCK/cmd"
+echo $$ > "$LOCK/pid"; started_at $$ > "$LOCK/pid_start"; echo "$PWD :: $*" > "$LOCK/cmd"
+OWNER_START=$(cat "$LOCK/pid_start")
+release() {
+  if [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] && [ "$(cat "$LOCK/pid_start" 2>/dev/null)" = "$OWNER_START" ]; then
+    rm -rf "$LOCK"
+  fi
+}
+trap release EXIT
 # The directory just acquired counts even before its owner files are complete.
 active=0
 for k in $(seq 1 "$S"); do [ -d "$(slotdir "$k")" ] && active=$((active + 1)); done
@@ -143,7 +162,6 @@ echo "[solo] slot $SLOT/$S, W=$W (Playwright $WPW)"
 child=""; watchdog=""
 # shellcheck disable=SC2046,SC2317,SC2329 # one PID per word; called by the trap below
 on_signal() { [ -n "$child" ] && kill_tree "$child"; [ -n "$watchdog" ] && kill -TERM $(descendants "$watchdog") 2>/dev/null; exit 130; }
-trap 'rm -rf "$LOCK"' EXIT
 trap on_signal INT TERM HUP
 
 start=$(date +%s)
@@ -156,9 +174,17 @@ while IFS= read -r -d '' a; do ARGS+=("$a"); done < "$LOCK/argv"
 "${ARGS[@]}" <&0 &
 child=$!
 echo "$child" > "$LOCK/child"; started_at "$child" > "$LOCK/child_start"
-# watchdog: if this solo dies (kill -9), the orphan watchdog must not touch ANOTHER solo's lock nor a reused PID
+watchdog_safe() {
+  kill -0 $$ 2>/dev/null && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] || return 1
+  [ -n "$OWNER_START" ] && [ "$(started_at $$)" = "$OWNER_START" ] || return 1
+  [ "$(cat "$LOCK/pid_start" 2>/dev/null)" = "$OWNER_START" ] || return 1
+  local child_start
+  child_start=$(cat "$LOCK/child_start" 2>/dev/null)
+  [ -n "$child_start" ] && [ "$(started_at "$child")" = "$child_start" ]
+}
+# An orphan watchdog cannot act on a replacement owner or a reused child PID.
 ( sleep "$TIMEOUT"
-  kill -0 $$ 2>/dev/null && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$$" ] || exit 0
+  watchdog_safe || exit 0
   echo "$TIMEOUT" > "$LOCK/timeout"; kill_tree "$child" >/dev/null 2>&1 ) &
 watchdog=$!
 wait "$child"; rc=$?

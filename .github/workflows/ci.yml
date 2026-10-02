@@ -29,6 +29,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Lock identity
+        run: python3 tests/identity_cases.py
       - name: Slot admission
         run: python3 tests/semaphore_runtime_cases.py
       - name: Memory gate
